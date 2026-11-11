@@ -8,7 +8,7 @@ namespace Data;
 
 public class DataLoading
 {
-  private static readonly string GamePath = Path.GetFullPath(Path.Combine("BepInEx", "config", "data"));
+  private static readonly string GamePath = DataPathDiagnostics.CaptureGamePath();
   private static readonly string ProfilePath = Path.GetFullPath(Path.Combine(Paths.ConfigPath, "data"));
 
   // Each file can have multiple data entries so we need to load them all.
@@ -60,12 +60,13 @@ public class DataLoading
 
   public static void LoadEntries()
   {
+    DataPathDiagnostics.PathsSnapshot("LoadEntries", GamePath, ProfilePath);
     var prev = Data;
     Data = [];
     ValueGroups.Clear();
-    var files = Directory.GetFiles(GamePath, "*.yaml", SearchOption.AllDirectories)
-      .Concat(Directory.GetFiles(ProfilePath, "*.yaml", SearchOption.AllDirectories))
-      .Concat(Directory.GetFiles(Yaml.BaseDirectory, Pattern, SearchOption.AllDirectories))
+    var files = DataPathDiagnostics.GetFiles("GamePath", GamePath, "*.yaml")
+      .Concat(DataPathDiagnostics.GetFiles("ProfilePath", ProfilePath, "*.yaml"))
+      .Concat(DataPathDiagnostics.GetFiles("BaseDirectory", Yaml.BaseDirectory, Pattern))
       .Select(Path.GetFullPath).Distinct().ToList();
     var data = Yaml.Read<DataYaml>(files);
     foreach (var d in data)
@@ -95,12 +96,14 @@ public class DataLoading
   public static string Pattern = "expand_data*.yaml";
   public static void SetupWatcher()
   {
+    DataPathDiagnostics.PathsSnapshot("SetupWatcher before directory creation", GamePath, ProfilePath);
     if (!Directory.Exists(GamePath))
       Directory.CreateDirectory(GamePath);
     if (!Directory.Exists(ProfilePath))
       Directory.CreateDirectory(ProfilePath);
     if (!Directory.Exists(Yaml.BaseDirectory))
       Directory.CreateDirectory(Yaml.BaseDirectory);
+    DataPathDiagnostics.PathsSnapshot("SetupWatcher after directory creation", GamePath, ProfilePath);
     Yaml.SetupWatcher(GamePath, "*", LoadEntries);
     if (GamePath != ProfilePath)
       Yaml.SetupWatcher(ProfilePath, "*", LoadEntries);

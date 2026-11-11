@@ -48,6 +48,7 @@ public class EWD : BaseUnityPlugin
     var movedSettings = ConfigMoves.Read(Config);
     ConfigWrapper wrapper = new("expand_config", Config, ConfigSync, () => Refresh.Request(Regen.World));
     Configuration.Init(wrapper, initialRevision);
+    DataPathDiagnostics.Snapshot("Awake after configuration");
     ConfigMoves.Apply(Config, movedSettings);
     LegacyEventsConfiguration.Migrate(Config);
     Harmony = new(GUID);
