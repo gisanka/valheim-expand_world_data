@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -63,9 +64,9 @@ public class DataLoading
     var prev = Data;
     Data = [];
     ValueGroups.Clear();
-    var files = Directory.GetFiles(GamePath, "*.yaml", SearchOption.AllDirectories)
-      .Concat(Directory.GetFiles(ProfilePath, "*.yaml", SearchOption.AllDirectories))
-      .Concat(Directory.GetFiles(Yaml.BaseDirectory, Pattern, SearchOption.AllDirectories))
+    var files = GetFiles(GamePath, "*.yaml")
+      .Concat(GetFiles(ProfilePath, "*.yaml"))
+      .Concat(GetFiles(Yaml.BaseDirectory, Pattern))
       .Select(Path.GetFullPath).Distinct().ToList();
     var data = Yaml.Read<DataYaml>(files);
     foreach (var d in data)
@@ -79,6 +80,19 @@ public class DataLoading
       LoadEntry(d, prev);
     PrefabHelper.ClearCache();
     Log.Info($"Loaded {Data.Count} data entries.");
+  }
+
+  private static string[] GetFiles(string path, string pattern)
+  {
+    try
+    {
+      return Directory.GetFiles(path, pattern, SearchOption.AllDirectories);
+    }
+    catch (Exception ex)
+    {
+      Log.Warning($"Unable to read data directory '{path}': {ex.GetType().Name}: {ex.Message}");
+      return [];
+    }
   }
 
   private static void LoadEntry(DataYaml data, Dictionary<int, DataEntry> oldData)
