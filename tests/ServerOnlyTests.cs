@@ -178,7 +178,7 @@ public class ServerOnlyTests
   [TestCase("DataTerritory", false)]
   [TestCase("DataEnvironments", false)]
   [TestCase("DataClutter", false)]
-  [TestCase("DataAltBiomes", false)]
+  [TestCase("DataAltBiomes", true)]
   [TestCase("DataSpawns", false)]
   [TestCase("DataDrops", false)]
   [TestCase("DataEvents", true)]

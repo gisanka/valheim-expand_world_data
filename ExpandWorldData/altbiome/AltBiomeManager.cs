@@ -20,11 +20,19 @@ public static partial class AltBiomeManager
   {
     Original = [.. AltBiomeList.m_altBiomes];
     Active = Original;
+    OriginalPlacement = Original.ToDictionary(alt => alt, alt => new AltBiomePlacementYaml
+    {
+      name = alt.m_name,
+      blockLocationNames = alt.m_blockLocationNames.ToArray(),
+      blockVegetationNames = alt.m_blockVegetationNames.ToArray()
+    });
   }
 
   // Static list must be cleared. Otherwise each load adds duplicate entries.
   public static void CleanUp()
   {
+    ApplyPlacementRules([]);
+    OriginalPlacement.Clear();
     foreach (var spawn in Active.SelectMany(alt => alt.m_spawn))
     {
       Loader.Data.Remove(spawn);
@@ -42,7 +50,8 @@ public static partial class AltBiomeManager
     protected override bool DataEnabled => Configuration.DataAltBiomes;
     protected override string ConfigValue { get => Configuration.valueAltBiomeData.Value; set => Configuration.valueAltBiomeData.Value = value; }
     protected override SetResult Set(Dictionary<string, string> files) => AltBiomeManager.Set(files);
-    protected override void WriteDefaultConfig() => File.WriteAllText(FilePath, Yaml.Serializer().Serialize(Original.Select(ToData).ToList()));
+    protected override string ToSyncValue(Dictionary<string, string> files) => Configuration.ServerOnly ? "" : base.ToSyncValue(files);
+    protected override void WriteDefaultConfig() => File.WriteAllText(FilePath, Yaml.Serializer().Serialize(Original.Select(ToDefaultData).ToList()));
   }
   private static readonly Sync Instance = new();
 
@@ -50,10 +59,11 @@ public static partial class AltBiomeManager
 
   public static void ReadConfigs() => Instance.ReadConfigs();
 
-  public static void FromSetting(string yaml) => Instance.FromSetting(yaml);
+  public static void FromSetting(string yaml) => Instance.FromSetting(Configuration.ServerOnly ? "" : yaml);
 
   private static SetResult Set(Dictionary<string, string> files)
   {
+    if (Configuration.ServerOnly) return SetPlacementRules(files);
     using var metadata = new MetadataLoad();
     var previous = Active;
     var result = LoadAndApply(files);

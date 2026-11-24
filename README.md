@@ -44,6 +44,7 @@ The following files and settings remain configurable:
 - `expand_locations.yaml`: Server-generated location content.
 - `expand_rooms.yaml`: Server-generated room content.
 - `expand_vegetation.yaml`: Server-generated vegetation and pickables.
+- `expand_altbiomes.yaml`: `blockLocationNames` and `blockVegetationNames` for existing vanilla alt biomes. Enable `Alt biome data` to apply them.
 - `expand_events.yaml`: Selection rules and server-side commands for existing event names.
 - `expand_world_data.cfg`: `Zone spawners`, `Random locations`, event timing, multiple events and per-player checks. File reload, migration, data splitting and blueprint folder settings also remain available.
 
@@ -51,7 +52,8 @@ Use prefabs available to the clients. Custom discovery labels, building restrict
 
 The following customizations are ignored:
 
-- World, biome, territory, environment, clutter and alternative biome data.
+- World, biome, territory, environment and clutter data.
+- All alternative biome fields except the two placement blocklists. Alternative biome distribution remains unchanged.
 - Spawn, drop and persistent event data.
 - Terrain generation, biome placement and nature rules.
 - Ashlands and Deep North terrain restrictions and gaps.

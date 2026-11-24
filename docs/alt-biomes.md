@@ -8,6 +8,12 @@ The file `expand_altbiomes.yaml` is created automatically when loading a world. 
 
 Alternative biomes can be directly assigned to specific areas with the `altBiome` field in the [world data](world.md).
 
+### Server-only mode
+
+With `Server only` and `Alt biome data` enabled, only `blockLocationNames` and `blockVegetationNames` are applied. Use `name` to select an existing vanilla alt biome. All other fields are ignored; the original alt-biome distribution, terrain, weather and creature spawns are preserved. Unknown or duplicate names reject the reload and keep the previous valid rules.
+
+An omitted blocklist retains its vanilla value; `[]` explicitly clears it. Omitting an entry or disabling `Alt biome data` restores its original blocklists. Reloading these rules keeps existing location plans and generated objects. Location blocks apply when locations are next generated; vegetation blocks apply to zones not yet generated. Client-generated, non-networked vegetation retains the client's original rules.
+
 ### Alternative Biome Fields
 
 Server side fields:

@@ -30,6 +30,7 @@ public partial class Configuration
     || ReferenceEquals(setting, configDataRooms)
     || ReferenceEquals(setting, configDataLocation)
     || ReferenceEquals(setting, configDataVegetation)
+    || ReferenceEquals(setting, configDataAltBiomes)
     || ReferenceEquals(setting, configDataEvents);
   public static ConfigEntry<bool> configSplitDataPerMod;
   public static bool SplitDataPerMod => configSplitDataPerMod.Value;
@@ -101,7 +102,7 @@ public partial class Configuration
   public static ConfigEntry<bool> configDataVegetation;
   public static bool DataVegetation => configDataVegetation.Value;
   public static ConfigEntry<bool> configDataAltBiomes;
-  public static bool DataAltBiomes => !ServerOnly && configDataAltBiomes.Value;
+  public static bool DataAltBiomes => configDataAltBiomes.Value;
   public static ConfigEntry<bool> configDataClutter;
   public static bool DataClutter => !ServerOnly && configDataClutter.Value;
   public static ConfigEntry<bool> configDataDungeons;
@@ -187,7 +188,7 @@ public partial class Configuration
     configDataLocation.SettingChanged += (s, e) => LocationManager.ReadConfigs();
     configDataVegetation = wrapper.Bind(section, "Vegetation data", false, false, "Use vegetation data", synchronizedSetting: false);
     configDataVegetation.SettingChanged += (s, e) => VegetationManager.ReadConfigs();
-    configDataAltBiomes = wrapper.Bind(section, "Alt biome data", false, false, "Use alternative biome data", synchronizedSetting: false);
+    configDataAltBiomes = wrapper.Bind(section, "Alt biome data", false, false, "Use alternative biome data. In Server only, apply only location and vegetation blocklists for existing alt biomes.", synchronizedSetting: false);
     configDataAltBiomes.SettingChanged += (s, e) => AltBiomeManager.ReadConfigs();
     configDataEvents = wrapper.Bind(section, "Event data", false, false, "Use event data.", synchronizedSetting: false);
     configDataEvents.SettingChanged += (s, e) => EventManager.ReadConfigs();
