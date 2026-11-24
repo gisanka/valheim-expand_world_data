@@ -43,7 +43,8 @@ public class PersistentEventLoader
     return result;
   }
 
-  private static PersistentEventSystem.ObjectSpawnSettings FromObject(PersistentEventObjectYaml data, string fileName)
+  internal static PersistentEventSystem.ObjectSpawnSettings FromObject(PersistentEventObjectYaml data, string fileName,
+    Dictionary<PersistentEventSystem.ObjectSpawnSettings, PersistentEventObjectExtra>? metadata = null)
   {
     PersistentEventSystem.ObjectSpawnSettings result = new()
     {
@@ -57,7 +58,7 @@ public class PersistentEventLoader
       maxSlope = data.maxSlope,
       waterSpawning = ParseWater(data.water, fileName),
     };
-    ObjectExtra[result] = new(data.prefabs, DataHelper.Get(data.data, fileName));
+    (metadata ?? ObjectExtra)[result] = new(data.prefabs, DataHelper.Get(data.data, fileName));
     return result;
   }
 

@@ -59,6 +59,7 @@ public class PersistentEventObjectYaml
 public class PersistentEventExtra(PersistentEventYaml data)
 {
   public bool Enabled = data.enabled;
+  public bool OverrideDuration = true;
   public float Chance = data.customChance;
   public float Interval = data.customInterval;
   public List<string[]>? RequiredKeys = StringList.ToRows(data.requiredGlobalKeys);

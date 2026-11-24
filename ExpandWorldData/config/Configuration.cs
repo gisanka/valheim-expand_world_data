@@ -31,6 +31,7 @@ public partial class Configuration
     || ReferenceEquals(setting, configDataLocation)
     || ReferenceEquals(setting, configDataVegetation)
     || ReferenceEquals(setting, configDataAltBiomes)
+    || ReferenceEquals(setting, configDataPersistentEvents)
     || ReferenceEquals(setting, configDataEvents);
   public static ConfigEntry<bool> configSplitDataPerMod;
   public static bool SplitDataPerMod => configSplitDataPerMod.Value;
@@ -41,7 +42,7 @@ public partial class Configuration
   public static ConfigEntry<bool> configDataEvents;
   public static bool DataEvents => configDataEvents.Value;
   public static ConfigEntry<bool> configDataPersistentEvents;
-  public static bool DataPersistentEvents => !ServerOnly && configDataPersistentEvents.Value;
+  public static bool DataPersistentEvents => configDataPersistentEvents.Value;
   public static ConfigEntry<bool> configDataSpawns;
   public static bool DataSpawns => !ServerOnly && configDataSpawns.Value;
   public static ConfigEntry<bool> configDataDrops;
@@ -192,7 +193,7 @@ public partial class Configuration
     configDataAltBiomes.SettingChanged += (s, e) => AltBiomeManager.ReadConfigs();
     configDataEvents = wrapper.Bind(section, "Event data", false, false, "Use event data.", synchronizedSetting: false);
     configDataEvents.SettingChanged += (s, e) => EventManager.ReadConfigs();
-    configDataPersistentEvents = wrapper.Bind(section, "Persistent event data", false, false, "Use persistent event data.", synchronizedSetting: false);
+    configDataPersistentEvents = wrapper.Bind(section, "Persistent event data", false, false, "Use persistent event data. In Server only, native event identities and client appearance are preserved.", synchronizedSetting: false);
     configDataPersistentEvents.SettingChanged += (s, e) => PersistentEvents.PersistentEventManager.ReadConfigs();
     configDataSpawns = wrapper.Bind(section, "Spawn data", false, false, "Use spawn data.", synchronizedSetting: false);
     configDataSpawns.SettingChanged += (s, e) => SpawnManager.ReadConfigs();

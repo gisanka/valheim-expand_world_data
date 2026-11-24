@@ -46,6 +46,7 @@ The following files and settings remain configurable:
 - `expand_vegetation.yaml`: Server-generated vegetation and pickables.
 - `expand_altbiomes.yaml`: `blockLocationNames` and `blockVegetationNames` for existing vanilla alt biomes. Enable `Alt biome data` to apply them.
 - `expand_events.yaml`: Selection rules and server-side commands for existing event names.
+- `expand_persistent_events.yaml`: Existing vanilla events, including start conditions, placement, objects, radius, duration, messages and commands. Enable `Persistent event data` to apply them. Client appearance remains native.
 - `expand_world_data.cfg`: `Zone spawners`, `Random locations`, event timing, multiple events and per-player checks. File reload, migration, data splitting and blueprint folder settings also remain available.
 
 Use prefabs available to the clients. Custom discovery labels, building restrictions, interior environments and custom map icons require client support. **Location** icons (StartTemple, Vendor_BlackForest, Hildir_camp, BogWitch_Camp and AncientUpgradeStation) are still supported. Non-networked location visuals use the client's original prefab.
@@ -54,7 +55,8 @@ The following customizations are ignored:
 
 - World, biome, territory, environment and clutter data.
 - All alternative biome fields except the two placement blocklists. Alternative biome distribution remains unchanged.
-- Spawn, drop and persistent event data.
+- Spawn and drop data.
+- Persistent event map labels, environments and graphical effects. These retain their original values.
 - Terrain generation, biome placement and nature rules.
 - Ashlands and Deep North terrain restrictions and gaps.
 - Custom map and water colors, lava behavior and location altitude scaling.

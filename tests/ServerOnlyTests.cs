@@ -182,7 +182,7 @@ public class ServerOnlyTests
   [TestCase("DataSpawns", false)]
   [TestCase("DataDrops", false)]
   [TestCase("DataEvents", true)]
-  [TestCase("DataPersistentEvents", false)]
+  [TestCase("DataPersistentEvents", true)]
   [TestCase("LegacyGeneration", false)]
   [TestCase("CustomWaterColor", false)]
   [TestCase("ScaleLocationAltitudeRequirement", false)]

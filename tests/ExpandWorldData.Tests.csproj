@@ -20,6 +20,9 @@
     <Reference Include="YamlDotNet">
       <HintPath>$(LibsDir)\YamlDotNet.dll</HintPath>
     </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExDir)\0Harmony.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <!-- Valheim assemblies load this facade at runtime when reflecting over game types. -->

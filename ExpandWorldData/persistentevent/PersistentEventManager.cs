@@ -6,7 +6,7 @@ using Service;
 
 namespace ExpandWorldData.PersistentEvents;
 
-public class PersistentEventManager
+public partial class PersistentEventManager
 {
   public static readonly string FilePath = Path.Combine(Yaml.Directory, "expand_persistent_events.yaml");
   public const string Pattern = "expand_persistent_events*.yaml";
@@ -17,7 +17,7 @@ public class PersistentEventManager
 
   public static void ReadConfigs() => Instance.ReadConfigs();
 
-  public static void FromSetting(string yaml) => Instance.FromSetting(yaml);
+  public static void FromSetting(string yaml) => Instance.FromSetting(Configuration.ServerOnly ? "" : yaml);
 
   private class Sync : SyncedDataManager
   {
@@ -26,6 +26,7 @@ public class PersistentEventManager
     protected override bool DataEnabled => Configuration.DataPersistentEvents;
     protected override string ConfigValue { get => Configuration.valuePersistentEventData.Value; set => Configuration.valuePersistentEventData.Value = value; }
     protected override SetResult Set(Dictionary<string, string> files) => PersistentEventManager.Set(files);
+    protected override string ToSyncValue(Dictionary<string, string> files) => Configuration.ServerOnly ? "" : base.ToSyncValue(files);
     protected override void WriteDefaultConfig()
     {
       if (Originals.Count == 0) return;
@@ -92,6 +93,7 @@ public class PersistentEventManager
       HasData = false;
       return SetResult.Applied;
     }
+    if (Configuration.ServerOnly) return LoadServerOnly(system, files);
     if (!Yaml.TryDeserialize<PersistentEventYaml, PersistentEventSystem.PersistentEvent>(files, PersistentEventLoader.FromData, out var data)) return SetResult.Failed;
     if (data.Count == 0) return SetResult.Failed;
     if (YamlDataManager.BackfillEnabled && AddMissingEntries(data)) return SetResult.Rewritten;

@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace ExpandWorldData.PersistentEvents;
 
-public static class PersistentEventRuntime
+public static partial class PersistentEventRuntime
 {
   // Events the commands and messages were already handled for.
   private static readonly Dictionary<int, PersistentEventSystem.ActivePersistentEvent> Known = [];
@@ -48,19 +48,6 @@ public static class PersistentEventRuntime
   {
     if (!IsValid(__instance, sourceEventId)) return false;
     return !PersistentEventLoader.Extra.TryGetValue(__instance.m_possibleEvents[sourceEventId], out var extra) || extra.Enabled;
-  }
-
-  internal static void AfterStart(PersistentEventSystem __instance, int sourceEventId)
-  {
-    if (!IsValid(__instance, sourceEventId)) return;
-    var list = __instance.m_activePersistentEvents.list;
-    if (list.Count == 0) return;
-    var active = list[list.Count - 1];
-    if (active.sourceEventId != sourceEventId || active.eventId != __instance.m_eventIdCounter - 1 || active.duration >= 0.0) return;
-    var source = __instance.m_possibleEvents[sourceEventId];
-    if (!source.hasDuration) return;
-    active.startTime = ZNet.instance.GetTimeSeconds();
-    active.duration = Random.Range(source.minDurationInSeconds, source.maxDurationInSeconds);
   }
 
   internal static void AfterListUpdate(PersistentEventSystem __instance, long target)
@@ -119,6 +106,16 @@ public static class PersistentEventRuntime
   internal static bool CreateObjects(PersistentEventSystem.ObjectSpawnSettings __instance, PersistentEventSystem.ActivePersistentEvent sourceEvent, List<Vector3>? spawnedObjectPositions)
   {
     if (!PersistentEventLoader.ObjectExtra.TryGetValue(__instance, out var extra) || extra.Prefabs.Length == 0) return true;
+    if (Configuration.ServerOnly)
+    {
+      // Blueprints can be edited independently after the event configuration was loaded.
+      try { PersistentEventManager.ValidateServerOnlyPrefabs(extra.Prefabs); }
+      catch (System.Exception e)
+      {
+        Log.Error(e.Message);
+        return false;
+      }
+    }
     spawnedObjectPositions ??= [];
     var count = Random.Range(__instance.minCount, Mathf.Max(__instance.maxCount, __instance.minCount));
     var maxSlope = __instance.maxSlope / 90f;

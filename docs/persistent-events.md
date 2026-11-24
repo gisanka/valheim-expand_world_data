@@ -10,7 +10,23 @@ Vanilla console commands work with the data: `pevents list`, `pevents start [nam
 
 ### Warning
 
-Active events are saved to the world by their position in the file. Removing or reordering entries changes which event the saved events refer to. Use `enabled: false` instead of removing entries. Active events pointing to missing entries are removed when the world is loaded.
+Outside server-only mode, active events are saved to the world by their position in the file. Removing or reordering entries changes which event the saved events refer to. Use `enabled: false` instead of removing entries. Active events pointing to missing entries are removed when the world is loaded.
+
+## Server-only mode
+
+With `Server only` *and* `Persistent event data` enabled, `name` selects an existing vanilla event. Its original index is preserved regardless of YAML order. Unknown or duplicate names cause rejection; missing entries keep their original definitions.
+
+All fields are configurable except `mapToken`, `environment`, `perBiomeEnvironments` and `graphicalEffects`, which are read from the client's original definitions. Event names cannot be changed or added. Clients do not receive the server's YAML.
+
+Omitted native settings retain the event's original values, including locations, object groups, radius and duration settings. Use `location: ''` to remove the original location and `objects: []` to remove its object groups. Automatic starts are disabled by default; keys restrict only automatic starts, while `enabled: false` also blocks native triggers. Configure `minDuration` or `maxDuration` to enable EWD duration handling; setting both to zero makes the event indefinite. The actual radius and time values are sent through the native event synchronization.
+
+Object prefabs must be available to vanilla clients and have a `ZNetView`. Blueprints composed of networked prefabs and custom ZDO data are supported through the existing EWD object-spawn path. Plain prefabs without custom data use native object spawning. Locations must already exist in location data. Native terrain editing is allowed; the world generator is not changed. ZDO values only affect behavior supported by the client's components. Direct object blueprints follow the normal EWD object-spawn behavior; location blueprints use the location terrain pipeline.
+
+Messages use the native message RPC. Commands run on the server and require the corresponding commands or server mods to be installed there. End messages and commands use the configuration active when the event ends, including after reload or restart.
+
+Reloads leave active event radii, time values and generated objects unchanged. Placement and content changes apply to future starts; disabling the data restores original definitions without stopping active events. Automatic roll timers restart after reload or server restart. No world regeneration is needed.
+
+Ending an event does not automatically remove its generated objects. Repeated automatic starts can leave objects behind; `maxConcurrent` limits active events rather than historical objects. Worlds previously saved with reordered or custom persistent event definitions cannot be remapped automatically to vanilla indices.
 
 ## Fields
 
