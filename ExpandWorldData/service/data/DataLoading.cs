@@ -65,7 +65,7 @@ public class DataLoading
     Data = [];
     ValueGroups.Clear();
     var files = GetSourceFiles(GamePath, ProfilePath, Yaml.BaseDirectory, Pattern);
-    var data = Yaml.Read<DataYaml>(files);
+    var data = DataYamlCache.Read(files);
     foreach (var d in data)
       ValueGroups.Add(d);
     if (ValueGroups.Count > 0)

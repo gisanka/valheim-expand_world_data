@@ -51,6 +51,7 @@ public class EWD : BaseUnityPlugin
       if (!Configuration.ServerOnly) Refresh.Request(Regen.World);
     });
     Configuration.Init(wrapper, initialRevision);
+    DataYamlCache.Init(Config);
     ConfigMoves.Apply(Config, movedSettings);
     LegacyEventsConfiguration.Migrate(Config);
     Harmony = new(GUID);
