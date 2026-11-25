@@ -97,6 +97,7 @@ internal sealed class RoomMetadataDependencies
   private readonly string VanillaRoot;
   private readonly string[] PatchRows;
   private Type? JotunnAssetManager;
+  private Type? FiresBundleCache;
   internal long IdentityTicks { get; }
   internal long AssetTicks { get; private set; }
   internal string LastRejection { get; private set; } = "none";
@@ -238,6 +239,8 @@ internal sealed class RoomMetadataDependencies
 
     if (patch.owner == "com.jotunn.jotunn")
       return IsReviewedJotunnPatch(target, method, groupIndex);
+    if (patch.owner == "com.Fire.FiresFixes")
+      return IsReviewedFiresPatch(target, method, groupIndex);
 
     // Reviewed installed VCP DLL: these two hooks only record elapsed time.
     // Do not trust a whole owner, or a future build with the same method names.
@@ -260,6 +263,51 @@ internal sealed class RoomMetadataDependencies
     var path = method.Module.Assembly.Location;
     return path.Length != 0 && Fingerprint.HashFile(path) ==
       "D429A728C9D44A258504E5170F4B6F45806E0141C9BB2657007C7543816D8DE2";
+  }
+
+  // Reviewed FiresFixes StartupBundleCache only redirects paths under its
+  // plugin root. Its other effects on vanilla paths are initialization and
+  // timing diagnostics. Match exact overload, hook category and binary.
+  private bool IsReviewedFiresPatch(MethodBase target, MethodInfo method, int groupIndex)
+  {
+    var hook = method.DeclaringType;
+    var cache = hook?.DeclaringType;
+    if (target.DeclaringType != typeof(AssetBundle) || !target.IsStatic ||
+        cache?.FullName != "FiresFixes.Fixes.StartupBundleCache" ||
+        !method.IsStatic || method.ReturnType != typeof(void) ||
+        method.Module.ModuleVersionId != new Guid("90474621-2228-4ada-b69e-f6eecb248780")) return false;
+    var parameters = target.GetParameters();
+    if (parameters.Length < 1 || parameters.Length > 3 || parameters[0].ParameterType != typeof(string) ||
+        (parameters.Length >= 2 && parameters[1].ParameterType != typeof(uint)) ||
+        (parameters.Length == 3 && parameters[2].ParameterType != typeof(ulong))) return false;
+    var isAsync = target.Name == "LoadFromFileAsync";
+    if (!isAsync && target.Name != "LoadFromFile") return false;
+    if (hook!.Name != (isAsync ? "Async" : "Sync") + parameters.Length) return false;
+    var token = isAsync ? 0x060009AC + (parameters.Length - 1) * 2 : 0x060009A3 + (parameters.Length - 1) * 3;
+    var prefix = groupIndex == 0 && method.Name == "Prefix" && method.MetadataToken == token;
+    var postfix = !isAsync && groupIndex == 1 && method.Name == "Postfix" && method.MetadataToken == token + 1;
+    if (!prefix && !postfix) return false;
+    var path = method.Module.Assembly.Location;
+    if (path.Length == 0 || Fingerprint.HashFile(path) !=
+      "920A74203789B17D0F1446E89D8D672285895F6053ED47873EAAFF69EAAD09FE") return false;
+    if (FiresBundleCache != null && FiresBundleCache != cache) return false;
+    FiresBundleCache = cache;
+    return true;
+  }
+
+  // Mirror Redirect's canonical plugin directory, without running EnsureReady.
+  // If its live initialized state disagrees, fail closed for this asset.
+  private string? FiresPluginRoot()
+  {
+    if (FiresBundleCache == null) return null;
+    const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
+    var expected = Path.GetFullPath(Paths.PluginPath).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+    if (FiresBundleCache.GetField("s_ready", flags)?.GetValue(null) is not bool ready)
+      throw new InvalidDataException("FiresFixes bundle cache state unavailable");
+    if (ready && (FiresBundleCache.GetField("s_pluginsDir", flags)?.GetValue(null) is not string actual ||
+      !string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)))
+      throw new InvalidDataException("FiresFixes bundle cache root mismatch");
+    return expected;
   }
 
   // Exact installed Jotunn binary, reviewed IL and Harmony attributes. The
@@ -378,6 +426,7 @@ internal sealed class RoomMetadataDependencies
       var bundleIndex = asset.m_bundleLoaderIndex;
       var indices = Loader.m_bundleLoaders[bundleIndex].m_bundleLoaderIndicesOfThisAndDependencies;
       if (indices == null || !indices.Contains(bundleIndex)) throw new InvalidDataException("dependency mapping");
+      var firesPluginRoot = FiresPluginRoot();
       var rows = new List<string> { id.ToString(), asset.m_assetPathInBundle };
       // These are the exact indices used by AssetLoader.Tick; include the root
       // bundle explicitly and preserve the loader's dependency order.
@@ -394,6 +443,8 @@ internal sealed class RoomMetadataDependencies
         if (!Path.IsPathRooted(bundle.m_bundlePath)) throw new InvalidDataException("relative bundle path");
         var path = Path.GetFullPath(bundle.m_bundlePath);
         if (!Under(path, VanillaRoot)) throw new InvalidDataException("non-vanilla bundle");
+        if (firesPluginRoot != null && path.StartsWith(firesPluginRoot, StringComparison.OrdinalIgnoreCase))
+          throw new InvalidDataException("FiresFixes redirectable bundle");
         rows.Add(bundle.m_bundleName); rows.Add(path); rows.Add(Fingerprint.HashFile(path));
       }
       key = (name, id + ":" + RoomMetadataFingerprint.Hex(RoomMetadataFingerprint.HashRows(rows)));
