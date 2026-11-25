@@ -131,7 +131,7 @@ public partial class LocationManager
     foreach (var loc in locations)
     {
       if (!LocationExtra.TryGetData(loc, out var extra)) continue;
-      var name = loc.m_prefab.Name;
+      var name = loc.m_prefab.name;
       if (!IsVanillaLocationIcon(extra.iconAlways, name, vanillaIcons))
       {
         unrecognized++;
@@ -148,7 +148,7 @@ public partial class LocationManager
   }
 
   internal static ISet<string> GetVanillaLocationIconNames() => new HashSet<string>(
-    DefaultEntries.Where(loc => loc.m_iconAlways || loc.m_iconPlaced).Select(loc => loc.m_prefab.Name),
+    DefaultEntries.Where(loc => loc.m_iconAlways || loc.m_iconPlaced).Select(loc => loc.m_prefab.name),
     StringComparer.Ordinal);
 
   internal static bool IsVanillaLocationIcon(string icon, string prefabName, ISet<string> vanillaIcons)

@@ -17,9 +17,9 @@ public partial class PersistentEventManager
       throw new ArgumentException($"Persistent event location '{name}' is not configured. Add it to location data first.");
     if (!location.m_prefab.IsValid)
     {
-      if (!BlueprintManager.TryGet(location.m_prefab.Name, out _))
+      if (!BlueprintManager.TryGet(location.m_prefab.name, out _))
         throw new ArgumentException($"Persistent event location '{name}' has no prefab or blueprint.");
-      ValidateServerOnlyPrefabs(new[] { location.m_prefab.Name });
+      ValidateServerOnlyPrefabs(new[] { location.m_prefab.name });
     }
   }
 

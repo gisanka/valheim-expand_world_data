@@ -58,5 +58,5 @@ public static partial class PersistentEventRuntime
   }
 
   private static bool IsEventLocationAvailable(ref SoftReference<GameObject> prefab)
-    => prefab.IsValid || BlueprintManager.Has(prefab.Name);
+    => prefab.IsValid || BlueprintManager.Has(prefab.name);
 }
