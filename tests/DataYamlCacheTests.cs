@@ -102,24 +102,30 @@ public class DataYamlCacheTests
     Assert.That(LastReport, Does.Contain("missing=1"));
   }
 
-  [Test]
-  public void CorruptionAndVersionMismatchFallBackToYaml()
+  [TestCase(true, "version=1")]
+  [TestCase(false, "read-or-integrity=1")]
+  public void CorruptionAndVersionMismatchFallBackToYaml(bool corruptVersion, string expectedMiss)
   {
+    // Start each corruption scenario with its own known-good cache file.
     var file = FileWith("a", "- name: A\n");
-    Read(file);
+    Assert.That(Read(file).Single().name, Is.EqualTo("A"));
+    Assert.That(LastReport, Does.Contain("missing=1").And.Contain("writeFailures=0"));
     var binary = Directory.GetFiles(cache, "*.bin").Single();
-    var bytes = File.ReadAllBytes(binary);
-    bytes[0] ^= 1;
-    File.WriteAllBytes(binary, bytes);
     Assert.That(Read(file).Single().name, Is.EqualTo("A"));
-    Assert.That(LastReport, Does.Contain("version=1"));
-    bytes = File.ReadAllBytes(binary);
-    bytes[bytes.Length - 1] ^= 1;
-    File.WriteAllBytes(binary, bytes);
+    Assert.That(LastReport, Does.Contain("hits=1").And.Contain("misses=0"));
+
+    var original = File.ReadAllBytes(binary);
+    var damaged = (byte[])original.Clone();
+    damaged[corruptVersion ? 0 : damaged.Length - 1] ^= 1;
+    File.WriteAllBytes(binary, damaged);
+    Assert.That(File.ReadAllBytes(binary), Is.EqualTo(damaged), "Corruption must reach the intended file.");
+
     Assert.That(Read(file).Single().name, Is.EqualTo("A"));
-    Assert.That(LastReport, Does.Contain("read-or-integrity=1"));
+    Assert.That(LastReport, Does.Contain(expectedMiss).And.Contain("writeFailures=0"));
+    Assert.That(File.ReadAllBytes(binary), Is.EqualTo(original),
+      "Fallback must restore the original valid cache bytes.");
     Assert.That(Read(file).Single().name, Is.EqualTo("A"));
-    Assert.That(LastReport, Does.Contain("hits=1"));
+    Assert.That(LastReport, Does.Contain("hits=1").And.Contain("misses=0"));
   }
 
   [TestCase("- name: A\n  unknownField: value\n")]
