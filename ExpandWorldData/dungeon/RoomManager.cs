@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Service;
 using UnityEngine;
 using Common;
@@ -120,6 +121,7 @@ public class RoomManager
     var result = SetResult.Failed;
     try
     {
+      using var reuse = RoomRebuildCache.Begin();
       return result = LoadAndApply(files);
     }
     finally
@@ -170,39 +172,18 @@ public class RoomManager
     return SetResult.Applied;
   }
   private static List<GameObject> CreatedObjects = [];
+  // Named non-inlined stages are also optional reflection hooks for the EWP startup profiler.
+  [MethodImpl(MethodImplOptions.NoInlining)]
   public static DungeonDB.RoomData CreateRoomData(string name, string[] snapPieces)
   {
     DungeonDB.RoomData roomData = new();
-    var room = new GameObject(name).AddComponent<Room>();
-    CreatedObjects.Add(room.gameObject);
+    var room = CreateRoomProxy(name);
     roomData.m_loadedRoom = room;
     var baseName = Parse.Name(name);
     if (RoomSpawning.Prefabs.TryGetValue(baseName, out var baseRoom))
     {
-      // Variants need to load the base room to get the connections.
       roomData.m_prefab = baseRoom.m_prefab;
-      var asset = Helper.SafeLoad(baseRoom);
-      if (asset == null)
-        return roomData;
-      room.m_musicPrefab = baseRoom.RoomInPrefab.m_musicPrefab;
-      var connections = baseRoom.RoomInPrefab.GetConnections();
-      if (connections.Length != snapPieces.Length)
-        Log.Warning($"Room {name} has {snapPieces.Length} connections, but base room {baseRoom.m_prefab.name} has {connections.Length} connections.");
-      // Initialize with base connections to allow data missing from the yaml.
-      room.m_roomConnections = [.. connections.Select(c =>
-        {
-          var conn = new GameObject(c.name).AddComponent<RoomConnection>();
-          CreatedObjects.Add(conn.gameObject);
-          conn.transform.parent = room.transform;
-          conn.transform.localPosition = c.transform.localPosition;
-          conn.transform.localRotation = c.transform.localRotation;
-          conn.m_type = c.m_type;
-          conn.m_entrance = c.m_entrance;
-          conn.m_allowDoor = c.m_allowDoor;
-          conn.m_doorOnlyIfOtherAlsoAllowsDoor = c.m_doorOnlyIfOtherAlsoAllowsDoor;
-          return conn;
-        })];
-      baseRoom.m_prefab.Release();
+      PopulateBaseRoom(baseName, name, room, baseRoom, snapPieces.Length);
     }
     else if (BlueprintManager.Load(baseName, snapPieces))
     {
@@ -212,16 +193,112 @@ public class RoomManager
         m_name = name,
         m_loadedAsset = room.gameObject
       };
-      room.m_roomConnections = [.. snapPieces.Select(c =>
-      {
-        var conn = new GameObject("").AddComponent<RoomConnection>();
-        CreatedObjects.Add(conn.gameObject);
-        conn.transform.parent = room.transform;
-        return conn;
-      })];
+      room.m_roomConnections = CreateBlueprintConnections(room, snapPieces.Length);
     }
     return roomData;
   }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static Room CreateRoomProxy(string name)
+  {
+    var room = new GameObject(name).AddComponent<Room>();
+    CreatedObjects.Add(room.gameObject);
+    return room;
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static RoomConnection CreateConnection(Room room, string name)
+  {
+    var conn = new GameObject(name).AddComponent<RoomConnection>();
+    CreatedObjects.Add(conn.gameObject);
+    conn.transform.parent = room.transform;
+    return conn;
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static RoomConnection[] CreateBlueprintConnections(Room room, int count)
+  {
+    var connections = new RoomConnection[count];
+    for (var i = 0; i < count; ++i)
+      connections[i] = CreateConnection(room, "");
+    return connections;
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static void PopulateBaseRoom(string baseName, string name, Room room, DungeonDB.RoomData baseRoom, int snapCount)
+  {
+    var cache = RoomRebuildCache.Current;
+    if (cache != null && cache.Connections.TryGetValue(baseRoom, out var saved))
+    {
+      WarnConnectionCount(name, baseRoom, snapCount, saved.Length);
+      ApplyCachedConnections(baseName, room, saved);
+      return;
+    }
+
+    // No asset handle or component is kept by the optimization. Retain the existing
+    // SafeLoad failure policy, including its null/exception behavior.
+    var asset = Helper.SafeLoad(baseRoom);
+    if (asset == null) return;
+    try
+    {
+      var original = ReadBaseRoom(baseName, baseRoom);
+      room.m_musicPrefab = original.m_musicPrefab;
+      var connections = ReadBaseConnections(baseName, original);
+      WarnConnectionCount(name, baseRoom, snapCount, connections.Length);
+      // A Unity component cannot safely be snapshotted across an asset release.
+      // Only rooms with a genuinely null music reference qualify for load elision.
+      var canReuse = cache != null && ReferenceEquals(original.m_musicPrefab, null);
+      var savedValues = CopyBaseConnections(room, connections, canReuse);
+      if (canReuse) cache!.Connections[baseRoom] = savedValues!;
+    }
+    finally { Helper.ReleaseRoomAsset(baseRoom); }
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static Room ReadBaseRoom(string baseName, DungeonDB.RoomData room) => room.RoomInPrefab;
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static RoomConnection[] ReadBaseConnections(string baseName, Room room) => room.GetConnections();
+
+  private static void WarnConnectionCount(string name, DungeonDB.RoomData baseRoom, int count, int actual)
+  {
+    if (actual != count)
+      Log.Warning($"Room {name} has {count} connections, but base room {baseRoom.m_prefab.name} has {actual} connections.");
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static RoomRebuildCache.ConnectionValues[]? CopyBaseConnections(Room room, RoomConnection[] source, bool remember)
+  {
+    var copies = new RoomConnection[source.Length];
+    var values = remember ? new RoomRebuildCache.ConnectionValues[source.Length] : null;
+    for (var i = 0; i < source.Length; ++i)
+    {
+      var original = source[i];
+      var conn = CreateConnection(room, original.name);
+      var value = new RoomRebuildCache.ConnectionValues(original);
+      value.Apply(conn);
+      if (values != null) values[i] = value;
+      copies[i] = conn;
+    }
+    room.m_roomConnections = copies;
+    return values;
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static void ApplyCachedConnections(string baseName, Room room, RoomRebuildCache.ConnectionValues[] values)
+  {
+    room.m_musicPrefab = null;
+    var copies = new RoomConnection[values.Length];
+    for (var i = 0; i < values.Length; ++i)
+    {
+      var conn = CreateConnection(room, values[i].Name);
+      values[i].Apply(conn);
+      copies[i] = conn;
+    }
+    room.m_roomConnections = copies;
+  }
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
   private static void UpdateConnections(Room room, RoomConnectionYaml[] data)
   {
     for (var i = 0; i < data.Length; ++i)
@@ -229,10 +306,11 @@ public class RoomManager
       var connData = data[i];
       if (i >= room.m_roomConnections.Length)
       {
-        var newConn = new GameObject(connData.type).AddComponent<RoomConnection>();
-        CreatedObjects.Add(newConn.gameObject);
-        newConn.transform.parent = room.transform;
-        room.m_roomConnections = room.m_roomConnections.Append(newConn).ToArray();
+        var newConn = CreateConnection(room, connData.type);
+        var connections = room.m_roomConnections;
+        Array.Resize(ref connections, connections.Length + 1);
+        connections[connections.Length - 1] = newConn;
+        room.m_roomConnections = connections;
       }
       var conn = room.m_roomConnections[i];
       if (conn.name == "")
@@ -250,6 +328,7 @@ public class RoomManager
         conn.transform.localRotation = Parse.AngleYXZ(split, 3);
     }
   }
+  [MethodImpl(MethodImplOptions.NoInlining)]
   private static DungeonDB.RoomData FromData(RoomYaml data, string fileName)
   {
     var snapPieces = data.connections.Select(c => c.position).ToArray();
@@ -285,44 +364,56 @@ public class RoomManager
     roomData.m_theme = room.m_theme;
     roomData.m_enabled = room.m_enabled;
     UpdateConnections(room, data.connections);
-    if (data.objects != null)
-      DungeonObjects.Objects[roomData] = Helper.ParseObjects(data.objects, fileName);
-    if (data.objectSwap != null)
-      DungeonObjects.ObjectSwaps[roomData] = Create.LoadSwaps(data.objectSwap);
-    if (data.objectData != null)
-      DungeonObjects.ObjectData[roomData] = Create.LoadData(data.objectData, fileName);
+    if (data.objects != null) LoadRoomObjects(roomData, data, fileName);
+    if (data.objectSwap != null) LoadRoomSwaps(roomData, data);
+    if (data.objectData != null) LoadRoomData(roomData, data, fileName);
     return roomData;
   }
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static void LoadRoomObjects(DungeonDB.RoomData roomData, RoomYaml data, string fileName) =>
+    DungeonObjects.Objects[roomData] = Helper.ParseObjects(data.objects!, fileName);
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static void LoadRoomSwaps(DungeonDB.RoomData roomData, RoomYaml data) =>
+    DungeonObjects.ObjectSwaps[roomData] = Create.LoadSwaps(data.objectSwap!);
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static void LoadRoomData(DungeonDB.RoomData roomData, RoomYaml data, string fileName) =>
+    DungeonObjects.ObjectData[roomData] = Create.LoadData(data.objectData!, fileName);
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
   private static RoomYaml ToData(DungeonDB.RoomData roomData)
   {
+    var baseName = roomData.m_prefab.name;
     var asset = Helper.SafeLoad(roomData);
     if (asset == null)
       return null!;
-    var room = roomData.RoomInPrefab;
-    RoomYaml data = new()
+    try
     {
-      name = room.gameObject.name,
-      theme = DataManager.FromEnum(room.m_theme),
-      entrance = room.m_entrance,
-      endCap = room.m_endCap,
-      divider = room.m_divider,
-      enabled = room.m_enabled,
-      size = $"{room.m_size.x},{room.m_size.z},{room.m_size.y}",
-      minPlaceOrder = room.m_minPlaceOrder,
-      weight = room.m_weight,
-      faceCenter = room.m_faceCenter,
-      perimeter = room.m_perimeter,
-      endCapPriority = room.m_endCapPrio,
-      connections = room.GetConnections().Select(connection => new RoomConnectionYaml
+      var room = ReadBaseRoom(baseName, roomData);
+      RoomYaml data = new()
       {
-        position = $"{Helper.Print(connection.transform.localPosition)},{Helper.Print(connection.transform.localRotation)}",
-        type = connection.m_type,
-        entrance = connection.m_entrance,
-        door = connection.m_allowDoor ? "true" : connection.m_doorOnlyIfOtherAlsoAllowsDoor ? "other" : "false"
-      }).ToArray(),
-    };
-    roomData.m_prefab.Release();
-    return data;
+        name = room.gameObject.name,
+        theme = DataManager.FromEnum(room.m_theme),
+        entrance = room.m_entrance,
+        endCap = room.m_endCap,
+        divider = room.m_divider,
+        enabled = room.m_enabled,
+        size = $"{room.m_size.x},{room.m_size.z},{room.m_size.y}",
+        minPlaceOrder = room.m_minPlaceOrder,
+        weight = room.m_weight,
+        faceCenter = room.m_faceCenter,
+        perimeter = room.m_perimeter,
+        endCapPriority = room.m_endCapPrio,
+        connections = ReadBaseConnections(baseName, room).Select(connection => new RoomConnectionYaml
+        {
+          position = $"{Helper.Print(connection.transform.localPosition)},{Helper.Print(connection.transform.localRotation)}",
+          type = connection.m_type,
+          entrance = connection.m_entrance,
+          door = connection.m_allowDoor ? "true" : connection.m_doorOnlyIfOtherAlsoAllowsDoor ? "other" : "false"
+        }).ToArray(),
+      };
+      return data;
+    }
+    finally { Helper.ReleaseRoomAsset(roomData); }
   }
 
   private static void SetDefaultEntries()

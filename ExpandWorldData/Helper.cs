@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Data;
 using Service;
 using UnityEngine;
@@ -24,18 +25,30 @@ public static class Helper
   }
   public static GameObject? SafeLoad(DungeonDB.RoomData room)
   {
+    GameObject? asset;
     try
     {
-      room.m_prefab.Load();
-      return room.m_prefab.Asset;
+      LoadRoomAsset(room);
+      asset = ReadRoomAsset(room);
     }
     catch
     {
       Log.Warning($"Failed to load room {room.m_prefab.name}. This is most likely issue with the mod adding the room.");
-      room.m_prefab.Release();
+      ReleaseRoomAsset(room);
       return null;
     }
+    // A non-throwing Load acquires a loader reference even when no asset is returned.
+    if (asset == null) ReleaseRoomAsset(room);
+    return asset;
   }
+
+  // Separate hooks for the optional startup profiler. Keep SafeLoad's public API.
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static void LoadRoomAsset(DungeonDB.RoomData room) => room.m_prefab.Load();
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static GameObject? ReadRoomAsset(DungeonDB.RoomData room) => room.m_prefab.Asset;
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  internal static void ReleaseRoomAsset(DungeonDB.RoomData room) => room.m_prefab.Release();
   public static GameObject? SafeLoad(ZoneSystem.ZoneLocation loc)
   {
     try

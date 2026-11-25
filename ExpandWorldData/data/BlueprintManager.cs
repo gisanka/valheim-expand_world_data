@@ -1,5 +1,8 @@
 ﻿using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using ExpandWorldData.Dungeon;
 using Service;
 using Common;
 using Data;
@@ -27,6 +30,7 @@ public class BlueprintManager
       bp.LoadSnapPoints(data.SnapPieces);
   }
   public static bool Load(string name) => Load(name, []);
+  [MethodImpl(MethodImplOptions.NoInlining)]
   public static bool Load(string name, string[] snapPieces)
   {
     var hash = name.GetStableHashCode();
@@ -35,7 +39,17 @@ public class BlueprintManager
     {
       // Already loaded so no point to check again.
       if (data.SnapPieces == snapPieces) return true;
+      // Equality alone is not enough for nested blueprints: another parent may
+      // have changed a child's metadata. Only reuse verified leaves within this
+      // room rebuild, and require the identical cached instance (watcher/alias safe).
+      if (CanReuseLeaf(name, snapPieces, data))
+      {
+        MetaData[name] = new(snapPieces);
+        return ReuseLeaf(name);
+      }
     }
+    var rebuild = RoomRebuildCache.Current;
+    rebuild?.Blueprints.Remove(name);
     MetaData[name] = new(snapPieces);
     BlueprintCache.Remove(name);
     if (BlueprintCache.TryGet(name, out var bp))
@@ -45,11 +59,29 @@ public class BlueprintManager
         if (obj.Chance == 0) continue;
         Load(obj.Prefab, snapPieces);
       }
+      if (rebuild != null && bp.Name == name && IsLeaf(bp))
+        rebuild.Blueprints[name] = new(bp, snapPieces);
       return true;
     }
     Log.Warning($"Object / blueprint {name} not found!");
     return false;
   }
+  private static bool IsLeaf(Blueprint bp) => bp.Objects.All(obj => obj.Chance == 0 ||
+    ZNetScene.instance.m_namedPrefabs.ContainsKey(obj.Prefab.GetStableHashCode()));
+
+  private static bool CanReuseLeaf(string name, string[] snapPieces, BlueprintMetaData data)
+  {
+    var rebuild = RoomRebuildCache.Current;
+    return rebuild != null && rebuild.Blueprints.TryGetValue(name, out var leaf) &&
+      leaf.SnapPieces.SequenceEqual(snapPieces, System.StringComparer.Ordinal) &&
+      leaf.SnapPieces.SequenceEqual(data.SnapPieces, System.StringComparer.Ordinal) &&
+      BlueprintCache.TryGet(name, out var current) && ReferenceEquals(current, leaf.Blueprint) && IsLeaf(current);
+  }
+
+  // Dedicated optional profiler hook for actual content-equality hits.
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  private static bool ReuseLeaf(string name) => true;
+
   // The watcher has already removed the blueprint from the cache.
   public static void Reload(string name, bool wasLoaded)
   {
