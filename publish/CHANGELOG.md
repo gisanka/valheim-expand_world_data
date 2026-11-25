@@ -1,3 +1,6 @@
+- v1.82
+  - Adds support for numeric `clearArea` in locations yaml.
+
 - v1.81
   - Adds support for clients having the mod installed even if the server does not require it. Thanks JPValheim!
   - Adds support for weights in blueprints. Similar to chance, but only one object of the group appears.
@@ -5,6 +8,7 @@
   - Fixes blueprint terrain not working for vegetation.
   - Fixes compatibility issue with Location Placement Accelerator mod.
   - Fixes lava damage being based on water boiling, now only depends on the biome lava field.
+  - Fixes alternative biome location block not working. Thanks Maxime!
   - Improves performance of water boiling and lava checks.
   - Improves handling of missing or inaccessible directories. Thanks Maxime!
 
