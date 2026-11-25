@@ -22,19 +22,58 @@ namespace ExpandWorldData.Dungeon;
 // prevent writing. This cannot detect arbitrary in-memory changes by other mods.
 internal sealed class RoomMetadataFingerprint
 {
-  private sealed class Stamp(string path, long length, DateTime modified, DateTime created, string hash)
-  {
-    internal readonly string Path = path, Hash = hash;
-    internal readonly long Length = length;
-    internal readonly DateTime Modified = modified, Created = created;
-    internal bool Matches(FileInfo info) => info.Exists && info.Length == Length &&
-      info.LastWriteTimeUtc == Modified && info.CreationTimeUtc == Created;
-  }
-
-  private readonly Dictionary<string, Stamp> Files = new(StringComparer.Ordinal);
+  private readonly Dictionary<string, RoomFileStamp> Files = new(StringComparer.Ordinal);
+  private readonly Dictionary<string, RoomFileStamp> Previous = new(StringComparer.Ordinal);
+  private readonly HashSet<string> ConfigFiles = new(StringComparer.Ordinal);
+  private readonly RoomNtfsProof Native = new();
+  private readonly string? IndexPath;
   internal int FileCount => Files.Count;
   internal long Bytes { get; private set; }
+  internal long HashedBytes { get; private set; }
   internal long Ticks { get; private set; }
+  internal long ProbeTicks { get; private set; }
+  internal long ContentTicks { get; private set; }
+  internal long IndexReadTicks { get; private set; }
+  internal long IndexWriteTicks { get; private set; }
+  internal int IndexHits { get; private set; }
+  internal int IndexMisses { get; private set; }
+  internal int ProofUnavailable { get; private set; }
+  internal string IndexRead { get; private set; } = "disabled";
+  internal string IndexWrite { get; private set; } = "not-needed";
+  internal string ProofFailure => Native.LastFailure;
+  internal string Changes { get; private set; } = "not-compared";
+
+  // The parameterless constructor keeps the original isolated test path.
+  internal RoomMetadataFingerprint() { }
+  internal RoomMetadataFingerprint(string path)
+  {
+    IndexPath = path;
+    var start = Stopwatch.GetTimestamp();
+    try
+    {
+      IndexRead = "missing";
+      if (!File.Exists(path)) return;
+      Previous = RoomFingerprintIndex.Read(path);
+      IndexRead = "valid";
+    }
+    catch (Exception ex) { IndexRead = "rejected:" + ex.GetType().Name; }
+    finally { IndexReadTicks = Stopwatch.GetTimestamp() - start; }
+  }
+
+  internal void MarkConfiguration(string path)
+  {
+    path = Path.GetFullPath(path);
+    ConfigFiles.Add(path);
+    if (Files.TryGetValue(path, out var stamp)) stamp.Config = true;
+  }
+
+  private RoomFileProof? Probe(FileStream stream)
+  {
+    if (IndexPath == null) return null;
+    var start = Stopwatch.GetTimestamp();
+    try { return Native.Read(stream); }
+    finally { ProbeTicks += Stopwatch.GetTimestamp() - start; }
+  }
 
   internal static byte[] HashRows(IEnumerable<string> rows)
   {
@@ -69,16 +108,40 @@ internal sealed class RoomMetadataFingerprint
         return previous.Hash;
       }
       CheckPath(path);
+      using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
+      info.Refresh();
       var length = info.Length;
-      var modified = info.LastWriteTimeUtc;
-      var created = info.CreationTimeUtc;
+      var modified = info.LastWriteTimeUtc.Ticks;
+      var created = info.CreationTimeUtc.Ticks;
+      if (stream.Length != length) throw new IOException("dependency changed before read");
+      var before = Probe(stream);
       string hash;
-      using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan))
-      using (var sha = SHA256.Create())
-        hash = Hex(sha.ComputeHash(stream));
+      var reuse = before != null && Previous.TryGetValue(path, out var old) && old.Matches(info) &&
+        old.Proof != null && before.CanReuse(old.Proof);
+      if (reuse)
+      {
+        hash = Previous[path].Hash;
+        IndexHits++;
+      }
+      else
+      {
+        var hashStart = Stopwatch.GetTimestamp();
+        try
+        {
+          using var sha = SHA256.Create();
+          hash = Hex(sha.ComputeHash(stream));
+        }
+        finally { ContentTicks += Stopwatch.GetTimestamp() - hashStart; }
+        HashedBytes += length;
+        IndexMisses++;
+      }
+      var after = before != null ? Probe(stream) : null;
+      if (before != null && (after == null || !after.CanReuse(before)))
+        throw new IOException("dependency USN changed during read");
+      if (after == null && IndexPath != null) ProofUnavailable++;
       Bytes += length;
       info.Refresh();
-      var stamp = new Stamp(path, length, modified, created, hash);
+      var stamp = new RoomFileStamp(path, length, modified, created, hash, after) { Config = ConfigFiles.Contains(path) };
       if (!stamp.Matches(info)) throw new IOException("dependency changed during read");
       Files.Add(path, stamp);
       return hash;
@@ -86,12 +149,58 @@ internal sealed class RoomMetadataFingerprint
     finally { Ticks += Stopwatch.GetTimestamp() - start; }
   }
 
-  internal bool Unchanged() => Files.Values.All(file => file.Matches(new FileInfo(file.Path)));
+  internal bool Unchanged()
+  {
+    foreach (var file in Files.Values)
+    {
+      if (!file.Matches(new FileInfo(file.Path))) return false;
+      if (file.Proof == null) continue;
+      CheckPath(file.Path);
+      using var stream = new FileStream(file.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+      var current = Probe(stream);
+      if (current == null || !current.CanReuse(file.Proof) || !file.Matches(new FileInfo(file.Path))) return false;
+    }
+    return true;
+  }
+
+  // Compare contents, not timestamps: a mod rewriting identical config bytes
+  // is not an invalidation. Report filenames only, never configuration values.
+  internal void SaveIndex()
+  {
+    if (IndexPath == null) return;
+    var start = Stopwatch.GetTimestamp();
+    try
+    {
+      if (IndexRead == "valid")
+      {
+        var changes = new List<(string Kind, RoomFileStamp File)>();
+        foreach (var file in Files.Values)
+        {
+          if (!Previous.TryGetValue(file.Path, out var old)) changes.Add(("added", file));
+          else if (!string.Equals(file.Hash, old.Hash, StringComparison.Ordinal)) changes.Add(("changed", file));
+        }
+        foreach (var file in Previous.Values)
+          if (!Files.ContainsKey(file.Path)) changes.Add(("removed", file));
+        Changes = $"added={changes.Count(c => c.Kind == "added")}, changed={changes.Count(c => c.Kind == "changed")}, removed={changes.Count(c => c.Kind == "removed")}, config={changes.Count(c => c.File.Config)}";
+        var details = changes.OrderByDescending(c => c.File.Config).ThenBy(c => c.File.Path, StringComparer.Ordinal).Take(60).ToArray();
+        foreach (var change in details)
+        {
+          var path = change.File.Path.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+          Log.Info($"Room fingerprint dependency {change.Kind} ({(change.File.Config ? "config" : "other")}): {path}");
+        }
+        if (changes.Count > details.Length) Log.Info($"Room fingerprint dependency details omitted: {changes.Count - details.Length}");
+      }
+      RoomFingerprintIndex.Write(IndexPath, Files);
+      IndexWrite = "written";
+    }
+    catch (Exception ex) { IndexWrite = "failed:" + ex.GetType().Name; }
+    finally { IndexWriteTicks = Stopwatch.GetTimestamp() - start; }
+  }
 }
 
 internal sealed class RoomMetadataDependencies
 {
-  internal readonly RoomMetadataFingerprint Fingerprint = new();
+  internal readonly RoomMetadataFingerprint Fingerprint = new(Path.GetFullPath(Path.Combine(Paths.ConfigPath, "..", "cache", "expand_world_data", "room-fingerprint-index-v1.bin")));
   internal readonly byte[] Identity;
   private readonly AssetBundleLoader Loader;
   private readonly string VanillaRoot;
@@ -168,11 +277,12 @@ internal sealed class RoomMetadataDependencies
     rows.Add(Fingerprint.HashFile(path));
   }
 
-  private string HashFileRows(IEnumerable<string> paths)
+  private string HashFileRows(IEnumerable<string> paths, bool config = false)
   {
     var rows = new List<string>();
     foreach (var path in paths.Select(Path.GetFullPath).Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal))
     {
+      if (config) Fingerprint.MarkConfiguration(path);
       rows.Add(path); rows.Add(Fingerprint.HashFile(path));
     }
     return RoomMetadataFingerprint.Hex(RoomMetadataFingerprint.HashRows(rows));
@@ -203,7 +313,7 @@ internal sealed class RoomMetadataDependencies
     var plugins = RoomMetadataFingerprint.Hex(RoomMetadataFingerprint.HashRows(rows));
     var configRoots = new[] { Paths.ConfigPath, Path.Combine(Paths.GameRootPath, "BepInEx", "config"), Yaml.BaseDirectory,
       Configuration.BlueprintGlobalFolder, Configuration.BlueprintLocalFolder };
-    var configs = HashFileRows(configRoots.SelectMany(root => InputFiles(root, true)));
+    var configs = HashFileRows(configRoots.SelectMany(root => InputFiles(root, true)), true);
     var binaries = HashFileRows(InputFiles(Paths.PluginPath, false).Concat(InputFiles(Paths.PatcherPluginPath, false))
       .Concat(Directory.EnumerateFiles(Paths.ManagedPath, "*.dll"))
       .Concat(Directory.EnumerateFiles(Paths.BepInExAssemblyDirectory, "*.dll")));

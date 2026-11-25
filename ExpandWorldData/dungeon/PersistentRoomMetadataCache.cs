@@ -142,6 +142,7 @@ internal static class PersistentRoomMetadataCache
           Log.Warning("Room metadata dependencies changed during the rebuild; cache not written. Reload after stopping concurrent changes.");
           return;
         }
+        Dependencies.Fingerprint.SaveIndex();
         if (Pending.Count == 0) return;
         var combined = new Dictionary<(string Name, string Id), ConnectionValues[]>(Loaded);
         foreach (var entry in Pending) combined.Add(entry.Key, entry.Value);
@@ -162,6 +163,10 @@ internal static class PersistentRoomMetadataCache
       $"readBytes={ReadBytes}, writtenBytes={WrittenBytes}, ms: diskReadAndDecode={Ms(ReadTicks)}, lookup={Ms(LookupTicks)}, encodeAndWrite={Ms(WriteTicks)}, rebuildTotal={Total.ElapsedMilliseconds}; " +
       $"dependencyFiles={Dependencies.Fingerprint.FileCount}, dependencyBytes={Dependencies.Fingerprint.Bytes}, dependencyRejected={Dependencies.LastRejection}, lookupFailure={LookupFailure}, " +
       $"identity={RoomMetadataFingerprint.Hex(Dependencies.Identity)}, identityMs={Ms(Dependencies.IdentityTicks)}, assetKeyMs={Ms(Dependencies.AssetTicks)}, fileHashMs={Ms(Dependencies.Fingerprint.Ticks)}; " +
+      $"fingerprintIndexRead={Dependencies.Fingerprint.IndexRead}, fingerprintIndexWrite={Dependencies.Fingerprint.IndexWrite}, " +
+      $"fingerprintHits={Dependencies.Fingerprint.IndexHits}, fingerprintMisses={Dependencies.Fingerprint.IndexMisses}, proofUnavailable={Dependencies.Fingerprint.ProofUnavailable}, " +
+      $"hashedBytes={Dependencies.Fingerprint.HashedBytes}, proofFailure={Dependencies.Fingerprint.ProofFailure}, proofMs={Ms(Dependencies.Fingerprint.ProbeTicks)}, contentHashMs={Ms(Dependencies.Fingerprint.ContentTicks)}, " +
+      $"indexReadMs={Ms(Dependencies.Fingerprint.IndexReadTicks)}, indexWriteMs={Ms(Dependencies.Fingerprint.IndexWriteTicks)}, dependencyChanges=({Dependencies.Fingerprint.Changes}); " +
       "opt-in: untracked runtime modifications are not covered; " + Dependencies.IdentityParts);
   }
 }
