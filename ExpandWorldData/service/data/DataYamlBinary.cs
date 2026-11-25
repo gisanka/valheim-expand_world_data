@@ -15,6 +15,7 @@ internal static class DataYamlBinary
   private static readonly Encoding Encoding = new UTF8Encoding(false, true);
   private static readonly (string Name, Type Type)[] DataYamlFields = [
     (nameof(DataYaml.name), typeof(string)),
+    (nameof(DataYaml.prefab), typeof(string)),
     (nameof(DataYaml.position), typeof(string)),
     (nameof(DataYaml.rotation), typeof(string)),
     (nameof(DataYaml.connection), typeof(string)),
@@ -172,6 +173,7 @@ internal static class DataYamlBinary
     if (value == null) { w.Write(false); return; }
     if (!Present(w, value, seen, typeof(DataYaml))) return;
     WriteString(w, value.name);
+    WriteString(w, value.prefab);
     WriteString(w, value.position);
     WriteString(w, value.rotation);
     WriteString(w, value.connection);
@@ -201,6 +203,7 @@ internal static class DataYamlBinary
     return new DataYaml
     {
       name = ReadString(r),
+      prefab = ReadString(r),
       position = ReadString(r),
       rotation = ReadString(r),
       connection = ReadString(r),

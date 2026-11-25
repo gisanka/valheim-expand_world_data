@@ -57,12 +57,15 @@ public class DataYamlCacheTests
 
   private string LastReport => infos.Last(line => line.StartsWith("Data YAML cache:"));
 
-  [Test]
-  public void WarmReadMatchesStrictYamlAndReturnsFreshObjects()
+  [TestCase(null)]
+  [TestCase("")]
+  [TestCase("Wood")]
+  public void WarmReadMatchesStrictYamlAndReturnsFreshObjects(string? prefab)
   {
-    var file = FileWith("all", "- name: Test\n  values: []\n  ints: [a, b]\n  items:\n  - prefab: Wood\n    chance: 0.25\n    customData: {second: b, first: a}\n  item: {}\n- valueGroup: Group\n  values: [x, y]\n");
+    var file = FileWith("all", "- name: Test\n" + (prefab == null ? "" : $"  prefab: '{prefab}'\n") + "  values: []\n  ints: [a, b]\n  items:\n  - prefab: Wood\n    chance: 0.25\n    customData: {second: b, first: a}\n  item: {}\n- valueGroup: Group\n  values: [x, y]\n");
     var expected = Yaml.Read<DataYaml>([file]);
     var cold = Read(file);
+    Assert.That(cold[0].prefab, Is.EqualTo(prefab));
     Assert.That(LastReport, Does.Contain("hits=0").And.Contain("missing=1"));
     Assert.That(Directory.GetFiles(cache, "*.bin").Length, Is.EqualTo(1));
     cold[0].ints![0] = "changed";
@@ -71,6 +74,7 @@ public class DataYamlCacheTests
     Assert.That(LastReport, Does.Contain("hits=1").And.Contain("misses=0"));
     Assert.That(warm.Count, Is.EqualTo(expected.Count));
     Assert.That(warm[0].name, Is.EqualTo(expected[0].name));
+    Assert.That(warm[0].prefab, Is.EqualTo(prefab));
     Assert.That(warm[0].ints, Is.EqualTo(expected[0].ints));
     Assert.That(warm[0].values, Is.Empty);
     Assert.That(warm[0].strings, Is.Null);
