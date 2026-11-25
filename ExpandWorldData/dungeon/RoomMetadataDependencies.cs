@@ -226,15 +226,38 @@ internal sealed class RoomMetadataDependencies
     return type == typeof(UnityEngine.Object) && method.Name == "get_name";
   }
 
-  private static bool IsKnownObserver(HarmonyLib.Patch patch)
+  private bool IsKnownObserver(MethodBase target, HarmonyLib.Patch patch, int groupIndex)
   {
     var method = patch.PatchMethod;
-    return patch.owner == "expand_world_prefabs.startup-profiler" &&
+    if (patch.owner == "expand_world_prefabs.startup-profiler" &&
       method.DeclaringType?.FullName == "ExpandWorld.Prefab.StartupProfiler" &&
-      method.Name is "MeasurePrefix" or "MeasureFinalizer" or "RoomNamePrefix" or "RoomAssetPrefix" or "RoomLoaderPrefix";
+      method.Name is "MeasurePrefix" or "MeasureFinalizer" or "RoomNamePrefix" or "RoomAssetPrefix" or "RoomLoaderPrefix")
+      return groupIndex != 2;
+
+    // Reviewed installed VCP DLL: these two hooks only record elapsed time.
+    // Do not trust a whole owner, or a future build with the same method names.
+    if (patch.owner != "MidnightsFX.ValheimCommunityPatch" ||
+      target.DeclaringType != typeof(AssetBundleLoader) || target.Name != "Load" ||
+      method.DeclaringType?.FullName != "ValheimCommunityPatch.Patches.Performance.WorldGenTimingStats+AssetLoadHook" ||
+      method.Module.ModuleVersionId != new Guid("60e16937-3ca2-4928-a3f0-27d6a3a13725") ||
+      !method.IsStatic || method.ReturnType != typeof(void)) return false;
+
+    var targetParameters = target.GetParameters();
+    if (targetParameters.Length != 1 || targetParameters[0].ParameterType != typeof(AssetID)) return false;
+    var parameters = method.GetParameters();
+    if (parameters.Length != 1 || parameters[0].Name != "__state") return false;
+    var prefix = groupIndex == 0 && method.Name == "Prefix" &&
+      parameters[0].IsOut && parameters[0].ParameterType == typeof(long).MakeByRefType();
+    var finalizer = groupIndex == 3 && method.Name == "Finalizer" &&
+      parameters[0].ParameterType == typeof(long);
+    if (!prefix && !finalizer) return false;
+
+    var path = method.Module.Assembly.Location;
+    return path.Length != 0 && Fingerprint.HashFile(path) ==
+      "D429A728C9D44A258504E5170F4B6F45806E0141C9BB2657007C7543816D8DE2";
   }
 
-  private static string[] ReadPatches()
+  private string[] ReadPatches()
   {
     var rows = new List<string>();
     foreach (var method in Harmony.GetAllPatchedMethods().Where(m => IsSkippedMethod(m) ||
@@ -245,12 +268,14 @@ internal sealed class RoomMetadataDependencies
       var info = Harmony.GetPatchInfo(method);
       if (info == null) throw new InvalidDataException("unknown patch state");
       rows.Add(method.DeclaringType?.FullName ?? ""); rows.Add(method.ToString());
-      foreach (var group in new[] { info.Prefixes, info.Postfixes, info.Transpilers, info.Finalizers })
+      var groups = new[] { info.Prefixes, info.Postfixes, info.Transpilers, info.Finalizers };
+      for (var groupIndex = 0; groupIndex < groups.Length; ++groupIndex)
       {
+        var group = groups[groupIndex];
         rows.Add("patch group"); rows.Add(group.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
         foreach (var patch in group)
         {
-          if (IsSkippedMethod(method) && (!IsKnownObserver(patch) || info.Transpilers.Contains(patch)))
+          if (IsSkippedMethod(method) && !IsKnownObserver(method, patch, groupIndex))
             throw new InvalidDataException("unverified patch: " + patch.owner + " / " + method.DeclaringType?.Name + "." + method.Name);
           rows.Add(patch.owner); rows.Add(patch.PatchMethod.Module.ModuleVersionId.ToString());
           rows.Add(patch.PatchMethod.DeclaringType?.FullName ?? "");
