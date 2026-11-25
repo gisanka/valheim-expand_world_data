@@ -40,7 +40,7 @@ public partial class LocationManager
     if (Helper.IsServer())
     {
       DefaultEntries = ZoneSystem.instance.m_locations;
-      Locations = Helper.ToDict(DefaultEntries, l => l.m_prefab.Name, l => l);
+      Locations = Helper.ToDict(DefaultEntries, l => l.m_prefab.name, l => l);
     }
   }
 
@@ -110,7 +110,7 @@ public partial class LocationManager
       return SetResult.Applied;
     }
     if (!Yaml.TryDeserialize<LocationYaml, ZoneSystem.ZoneLocation>(files, FromData, out var items)) return SetResult.Failed;
-    var parsed = items.Where(loc => !string.IsNullOrWhiteSpace(loc.m_prefab.Name)).ToList();
+    var parsed = items.Where(loc => !string.IsNullOrWhiteSpace(loc.m_prefab.name)).ToList();
     if (parsed.Count == 0)
     {
       Log.Warning($"Failed to load any location data.");
@@ -168,7 +168,7 @@ public partial class LocationManager
     var zs = ZoneSystem.instance;
     zs.m_locationsByHash.Clear();
     foreach (var loc in zs.m_locations)
-      zs.m_locationsByHash[loc.m_prefab.Name.GetStableHashCode()] = loc;
+      zs.m_locationsByHash[loc.m_prefab.name.GetStableHashCode()] = loc;
   }
   private static void UpdateInstances()
   {
@@ -177,7 +177,7 @@ public partial class LocationManager
     foreach (var zone in instances.Keys.ToArray())
     {
       var value = instances[zone];
-      var location = zs.m_locations.FirstOrDefault(location => location.m_prefab.Name == value.m_location.m_prefab.Name);
+      var location = zs.m_locations.FirstOrDefault(location => location.m_prefab.name == value.m_location.m_prefab.name);
       // Jewelcrafting has dynamic locations that don't exist in the location list.
       if (location == null) continue;
       value.m_location = location;
@@ -191,7 +191,7 @@ public partial class LocationManager
   internal static Dictionary<string, ZoneSystem.ZoneLocation> Locations = [];
   private static bool AddMissingEntries(List<ZoneSystem.ZoneLocation> items)
   {
-    var missing = YamlFiles.GetMissingEntries(DefaultEntries, items.Select(item => item.m_prefab.Name), item => item.m_prefab.Name).Select(ToData).ToList();
+    var missing = YamlFiles.GetMissingEntries(DefaultEntries, items.Select(item => item.m_prefab.name), item => item.m_prefab.name).Select(ToData).ToList();
     if (missing.Count == 0) return false;
     Log.Warning($"Adding {missing.Count} missing locations to the expand_locations.yaml file.");
     Save(missing, true);
