@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using BepInEx.Configuration;
 using Data;
 using UnityEngine;
@@ -57,41 +56,6 @@ internal sealed class RoomRebuildCache
       AllowDoor = connection.m_allowDoor;
       DoorOnlyIfOtherAllows = connection.m_doorOnlyIfOtherAlsoAllowsDoor;
     }
-
-    // Only scalar/vector values are serialized. Never serialize Unity objects or handles.
-    private ConnectionValues(string name, string type, Vector3 position, Quaternion rotation,
-      bool entrance, bool allowDoor, bool doorOnlyIfOtherAllows)
-    {
-      Name = name;
-      Type = type;
-      Position = position;
-      Rotation = rotation;
-      Entrance = entrance;
-      AllowDoor = allowDoor;
-      DoorOnlyIfOtherAllows = doorOnlyIfOtherAllows;
-    }
-
-    internal void Write(BinaryWriter writer)
-    {
-      RoomMetadataFile.WriteString(writer, Name);
-      RoomMetadataFile.WriteString(writer, Type);
-      writer.Write(Position.x);
-      writer.Write(Position.y);
-      writer.Write(Position.z);
-      writer.Write(Rotation.x);
-      writer.Write(Rotation.y);
-      writer.Write(Rotation.z);
-      writer.Write(Rotation.w);
-      writer.Write(Entrance);
-      writer.Write(AllowDoor);
-      writer.Write(DoorOnlyIfOtherAllows);
-    }
-
-    internal static ConnectionValues Read(BinaryReader reader) => new(
-      RoomMetadataFile.ReadString(reader)!, RoomMetadataFile.ReadString(reader)!,
-      new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()),
-      new Quaternion(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()),
-      RoomMetadataFile.ReadBoolean(reader), RoomMetadataFile.ReadBoolean(reader), RoomMetadataFile.ReadBoolean(reader));
 
     internal void Apply(RoomConnection connection)
     {

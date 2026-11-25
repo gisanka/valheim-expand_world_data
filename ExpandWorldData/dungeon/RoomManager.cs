@@ -122,10 +122,7 @@ public class RoomManager
     try
     {
       using var reuse = RoomRebuildCache.Begin();
-      using var persistent = PersistentRoomMetadataCache.Begin(files.Count > 0 && RoomSpawning.Prefabs.Count > 0);
-      result = LoadAndApply(files);
-      if (result == SetResult.Applied) persistent.Commit();
-      return result;
+      return result = LoadAndApply(files);
     }
     finally
     {
@@ -238,24 +235,10 @@ public class RoomManager
       return;
     }
 
-    var persistent = PersistentRoomMetadataCache.Current;
-    if (persistent != null && persistent.TryGet(baseName, baseRoom, out var diskValues))
-    {
-      WarnConnectionCount(name, baseRoom, snapCount, diskValues.Length);
-      ApplyCachedConnections(baseName, room, diskValues);
-      if (cache != null) cache.Connections[baseRoom] = diskValues;
-      return;
-    }
-
     // No asset handle or component is kept by the optimization. Retain the existing
     // SafeLoad failure policy, including its null/exception behavior.
     var asset = Helper.SafeLoad(baseRoom);
-    if (asset == null)
-    {
-      persistent?.RecordLoadFailure();
-      return;
-    }
-    RoomRebuildCache.ConnectionValues[]? captured = null;
+    if (asset == null) return;
     try
     {
       var original = ReadBaseRoom(baseName, baseRoom);
@@ -264,18 +247,11 @@ public class RoomManager
       WarnConnectionCount(name, baseRoom, snapCount, connections.Length);
       // A Unity component cannot safely be snapshotted across an asset release.
       // Only rooms with a genuinely null music reference qualify for load elision.
-      var noMusic = ReferenceEquals(original.m_musicPrefab, null);
-      var canReuse = (cache != null || persistent != null) && noMusic;
-      captured = CopyBaseConnections(room, connections, canReuse);
-      if (!noMusic) persistent?.RecordMusicExcluded();
+      var canReuse = cache != null && ReferenceEquals(original.m_musicPrefab, null);
+      var savedValues = CopyBaseConnections(room, connections, canReuse);
+      if (canReuse) cache!.Connections[baseRoom] = savedValues!;
     }
     finally { Helper.ReleaseRoomAsset(baseRoom); }
-    // Capture only after the normal conversion and release have completed.
-    if (captured != null)
-    {
-      if (cache != null) cache.Connections[baseRoom] = captured;
-      persistent?.Remember(baseName, baseRoom, captured);
-    }
   }
 
   [MethodImpl(MethodImplOptions.NoInlining)]

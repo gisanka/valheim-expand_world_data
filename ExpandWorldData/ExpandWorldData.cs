@@ -53,7 +53,6 @@ public class EWD : BaseUnityPlugin
     Configuration.Init(wrapper, initialRevision);
     DataYamlCache.Init(Config);
     RoomRebuildCache.Init(Config);
-    PersistentRoomMetadataCache.Init(Config);
     ConfigMoves.Apply(Config, movedSettings);
     LegacyEventsConfiguration.Migrate(Config);
     Harmony = new(GUID);
