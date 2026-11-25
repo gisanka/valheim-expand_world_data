@@ -90,7 +90,8 @@ internal static class DataYamlBinary
   {
     w.Write(value != null);
     if (value == null) return false;
-    if (value.GetType() != type || !seen.Add(value)) throw new InvalidDataException("Shared or unsupported DTO reference");
+    if (value.GetType() != type) throw new InvalidDataException($"Unsupported DTO type: expected {type.FullName}, actual {value.GetType().FullName}");
+    if (!seen.Add(value)) throw new InvalidDataException($"Shared mutable DTO reference: {type.FullName}");
     return true;
   }
 

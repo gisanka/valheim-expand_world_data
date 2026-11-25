@@ -147,6 +147,26 @@ public class DataYamlCacheTests
     var data = new List<DataYaml> { new() { ints = shared }, new() { ints = shared } };
     var error = Assert.Throws<TargetInvocationException>(() => BinaryType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, new object[] { data }));
     Assert.That(error!.InnerException, Is.TypeOf<InvalidDataException>());
+    Assert.That(error.InnerException!.Message, Does.Contain("Shared mutable DTO reference").And.Contain("System.String[]"));
+  }
+
+  [Test]
+  public void EncodeRejectionReportsSourceAndReasonWithoutWritingCache()
+  {
+    var file = FileWith("aliased", "- name: A\n");
+    var shared = new[] { "x" };
+    var data = new List<DataYaml> { new() { ints = shared }, new() { ints = shared } };
+    var statsType = CacheType.GetNestedType("Stats", BindingFlags.NonPublic)!;
+    var stats = Activator.CreateInstance(statsType, true)!;
+    Directory.CreateDirectory(cache);
+    var path = Path.Combine(cache, "test.bin");
+    CacheType.GetMethod("TryWrite", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null,
+      new object[] { file, path, new byte[32], new byte[32], data, stats });
+    statsType.GetMethod("Report", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(stats, null);
+    Assert.That(LastReport, Does.Contain("encodeRejected=1").And.Contain("writeFailures=0"));
+    Assert.That(infos.Any(line => line.Contains("Data YAML cache encode rejected file:") && line.Contains(file) && line.Contains("Shared mutable DTO reference: System.String[]")), Is.True);
+    Assert.That(Directory.GetFiles(cache), Is.Empty);
+    Assert.That(errors, Is.Empty);
   }
 
   [Test]

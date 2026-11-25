@@ -103,7 +103,7 @@ internal static class DataYamlCache
         finally { stats.YamlParse += Stopwatch.GetTimestamp() - start; }
         // The tolerant path must continue to emit the original strict-parser diagnostic on every load.
         if (strict && path != null && fingerprint != null)
-          TryWrite(path, version, fingerprint, parsed, stats);
+          TryWrite(file, path, version, fingerprint, parsed, stats);
         else if (!strict) stats.StrictRejected++;
         result.AddRange(parsed);
       }
@@ -180,16 +180,16 @@ internal static class DataYamlCache
     finally { stats.Decode += Stopwatch.GetTimestamp() - start; }
   }
 
-  private static void TryWrite(string path, byte[] version, byte[] fingerprint, List<DataYaml> data, Stats stats)
+  private static void TryWrite(string file, string path, byte[] version, byte[] fingerprint, List<DataYaml> data, Stats stats)
   {
     byte[] payload;
     var start = Stopwatch.GetTimestamp();
     try
     {
       payload = DataYamlBinary.Encode(data);
-      if (payload.Length > MaxPayload) throw new InvalidDataException();
+      if (payload.Length > MaxPayload) throw new InvalidDataException("Cache payload too large");
     }
-    catch (Exception) { stats.EncodeRejected++; return; }
+    catch (Exception ex) { stats.RejectEncode(file, ex); return; }
     finally { stats.Encode += Stopwatch.GetTimestamp() - start; }
     start = Stopwatch.GetTimestamp();
     string? temp = null;
@@ -239,6 +239,27 @@ internal static class DataYamlCache
     private readonly int Gc0 = GC.CollectionCount(0), Gc1 = GC.CollectionCount(1), Gc2 = GC.CollectionCount(2);
     private readonly long Heap = GC.GetTotalMemory(false);
     private readonly Dictionary<string, int> Misses = [];
+    private readonly Dictionary<string, int> EncodeReasons = [];
+    private readonly List<string> EncodeDetails = [];
+    private const int MaxEncodeDetails = 30;
+    private int DroppedEncodeDetails;
+    internal void RejectEncode(string file, Exception exception)
+    {
+      EncodeRejected++;
+      // Codec errors contain only fixed diagnostics/type names, not DTO contents.
+      // Other exception messages may contain arbitrary user data; log their type only.
+      var reason = exception.GetType().Name;
+      if (exception is InvalidDataException) reason += ": " + exception.Message;
+      reason = reason.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+      if (reason.Length > 256) reason = reason.Substring(0, 256);
+      EncodeReasons[reason] = EncodeReasons.TryGetValue(reason, out var count) ? count + 1 : 1;
+      if (EncodeDetails.Count < MaxEncodeDetails)
+      {
+        var source = file.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+        EncodeDetails.Add(source + " => " + reason);
+      }
+      else DroppedEncodeDetails++;
+    }
     internal int Files, Hits, StrictRejected, EncodeRejected, WriteFailures, FileErrors, CleanupFailures;
     private readonly List<(string File, long Ticks)> Slowest = [];
     internal void RecordFile(string file, long ticks)
@@ -251,9 +272,17 @@ internal static class DataYamlCache
     internal long YamlBytes, CacheBytesRead, CacheBytesWritten, YamlRead, Fingerprint, CacheRead, Decode, YamlParse, Encode, Write;
     internal void Miss(string reason) => Misses[reason] = Misses.TryGetValue(reason, out var count) ? count + 1 : 1;
     private static string Ms(long ticks) => (ticks * 1000.0 / Stopwatch.Frequency).ToString("F2", CultureInfo.InvariantCulture);
-    internal void Report() => Log.Info($"Data YAML cache: files={Files}, hits={Hits}, misses={Misses.Values.Sum()} ({string.Join(", ", Misses.Select(kv => $"{kv.Key}={kv.Value}"))}), strictRejected={StrictRejected}, encodeRejected={EncodeRejected}, writeFailures={WriteFailures}, fileErrors={FileErrors}, cleanupFailures={CleanupFailures}, " +
+    internal void Report()
+    {
+      Log.Info($"Data YAML cache: files={Files}, hits={Hits}, misses={Misses.Values.Sum()} ({string.Join(", ", Misses.Select(kv => $"{kv.Key}={kv.Value}"))}), strictRejected={StrictRejected}, encodeRejected={EncodeRejected}, writeFailures={WriteFailures}, fileErrors={FileErrors}, cleanupFailures={CleanupFailures}, " +
       $"yamlUtf8Bytes={YamlBytes}, cacheReadBytes={CacheBytesRead}, cacheWriteBytes={CacheBytesWritten}, " +
       $"ms: yamlRead={Ms(YamlRead)}, fingerprint={Ms(Fingerprint)}, cacheReadAndVerify={Ms(CacheRead)}, binaryRead={Ms(Decode)}, yamlParse={Ms(YamlParse)}, binaryWrite={Ms(Encode)}, cacheWrite={Ms(Write)}, total={Total.ElapsedMilliseconds}, " +
       $"processGc={GC.CollectionCount(0)-Gc0}/{GC.CollectionCount(1)-Gc1}/{GC.CollectionCount(2)-Gc2}, processHeapDelta={GC.GetTotalMemory(false)-Heap}; slowest files (ms): {string.Join(", ", Slowest.Select(f => $"{f.File}={Ms(f.Ticks)}"))}");
+      if (EncodeRejected > 0)
+      {
+        Log.Info($"Data YAML cache encode rejected: reasons={string.Join("; ", EncodeReasons.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"))}; omittedDetails={DroppedEncodeDetails}");
+        foreach (var detail in EncodeDetails) Log.Info("Data YAML cache encode rejected file: " + detail);
+      }
+    }
   }
 }
