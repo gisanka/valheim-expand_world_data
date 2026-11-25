@@ -158,7 +158,7 @@ internal sealed class RoomMetadataDependencies
     // BepInEx can load a preloader-patched game assembly from bytes, without
     // Location. Hash the original managed file, active MVID and patcher inputs.
     var path = string.IsNullOrEmpty(assembly.Location) ? fallback : assembly.Location;
-    if (string.IsNullOrEmpty(path)) throw new InvalidDataException("assembly without file");
+    if (path == null || path.Length == 0) throw new InvalidDataException("assembly without file");
     rows.Add(assembly.FullName);
     rows.Add(assembly.ManifestModule.ModuleVersionId.ToString());
     rows.Add(Path.GetFullPath(path));
