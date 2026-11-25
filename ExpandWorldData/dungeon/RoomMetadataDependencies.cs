@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -95,6 +96,7 @@ internal sealed class RoomMetadataDependencies
   private readonly AssetBundleLoader Loader;
   private readonly string VanillaRoot;
   private readonly string[] PatchRows;
+  private Type? JotunnAssetManager;
   internal long IdentityTicks { get; }
   internal long AssetTicks { get; private set; }
   internal string LastRejection { get; private set; } = "none";
@@ -103,7 +105,7 @@ internal sealed class RoomMetadataDependencies
   internal RoomMetadataDependencies()
   {
     var start = Stopwatch.GetTimestamp();
-    if (AssetRuntime.Loader is not AssetBundleLoader loader || !loader.Initialized || !ReferenceEquals(loader, AssetBundleLoader.Instance))
+    if (AssetRuntime.Loader is not AssetBundleLoader loader || !loader.Initialized || loader.m_asyncInitWorker != null || !ReferenceEquals(loader, AssetBundleLoader.Instance))
       throw new InvalidDataException("unsupported or uninitialized asset loader");
     Loader = loader;
     VanillaRoot = Path.GetFullPath(SoftReferenceableAssets.Shared.GetBuildDirectory());
@@ -226,13 +228,16 @@ internal sealed class RoomMetadataDependencies
     return type == typeof(UnityEngine.Object) && method.Name == "get_name";
   }
 
-  private bool IsKnownObserver(MethodBase target, HarmonyLib.Patch patch, int groupIndex)
+  private bool IsKnownCompatiblePatch(MethodBase target, HarmonyLib.Patch patch, int groupIndex)
   {
     var method = patch.PatchMethod;
     if (patch.owner == "expand_world_prefabs.startup-profiler" &&
       method.DeclaringType?.FullName == "ExpandWorld.Prefab.StartupProfiler" &&
       method.Name is "MeasurePrefix" or "MeasureFinalizer" or "RoomNamePrefix" or "RoomAssetPrefix" or "RoomLoaderPrefix")
       return groupIndex != 2;
+
+    if (patch.owner == "com.jotunn.jotunn")
+      return IsReviewedJotunnPatch(target, method, groupIndex);
 
     // Reviewed installed VCP DLL: these two hooks only record elapsed time.
     // Do not trust a whole owner, or a future build with the same method names.
@@ -257,9 +262,67 @@ internal sealed class RoomMetadataDependencies
       "D429A728C9D44A258504E5170F4B6F45806E0141C9BB2657007C7543816D8DE2";
   }
 
+  // Exact installed Jotunn binary, reviewed IL and Harmony attributes. The
+  // initialization and path-map hooks have already run (or aren't invoked by
+  // the cold asset path). The two load/release hooks are NOT observers: their
+  // effects are conditional on assetsToResolve. Never allow a registered mock.
+  private bool IsReviewedJotunnPatch(MethodBase target, MethodInfo method, int groupIndex)
+  {
+    if (method.DeclaringType?.FullName != "Jotunn.Managers.AssetManager+Patches" ||
+        !method.IsStatic ||
+        method.Module.ModuleVersionId != new Guid("90c424ee-ad1c-4440-8dc8-8bd2adad75b1"))
+      return false;
+
+    var type = target.DeclaringType;
+    var token = method.MetadataToken;
+    var initOrMap = type == typeof(AssetBundleLoader) &&
+      ((target.Name == "OnInitCompleted" && method.Name == "AssetBundleLoader_Load" && groupIndex == 1 && token == 0x06000938) ||
+       (target.Name == "InitializeDataSide" && method.Name == "AssetBundleLoader_InitializeDataSide" && groupIndex == 0 && token == 0x06000939) ||
+       (target.Name == "GetAllAssetPathsMappedToAssetID" && method.Name == "AssetBundleLoader_GetAllAssetPathsMappedToAssetID" && groupIndex == 2 && token == 0x0600093B));
+    var guarded = type == typeof(AssetLoader) &&
+      ((target.Name == "InvokeCallbacks" && method.Name == "SwapResolvedAsset" && groupIndex == 0 && token == 0x0600093C) ||
+       (target.Name == "Release" && method.Name == "AssetLoader_Release" && groupIndex == 1 && token == 0x0600093D));
+    if (!initOrMap && !guarded) return false;
+    var path = method.Module.Assembly.Location;
+    if (path.Length == 0 || Fingerprint.HashFile(path) !=
+      "9509221046842A70F94B98BAB4CB41005DEE026823A7A79345829ED46A30F796") return false;
+
+    if (guarded)
+    {
+      var manager = method.DeclaringType!.DeclaringType;
+      if (manager == null || (JotunnAssetManager != null && JotunnAssetManager != manager)) return false;
+      JotunnAssetManager = manager;
+    }
+    return true;
+  }
+
+  // Read the existing singleton directly. Calling Instance could create it,
+  // which is itself a behavioral change. Look at the LIVE registry on every
+  // lookup and again after capture; don't fingerprint a cached list of IDs.
+  internal bool CanCapture(AssetID id)
+  {
+    if (JotunnAssetManager == null) return true;
+    try
+    {
+      var instanceField = JotunnAssetManager.GetField("instance", BindingFlags.Static | BindingFlags.NonPublic);
+      var registryField = JotunnAssetManager.GetField("assetsToResolve", BindingFlags.Instance | BindingFlags.NonPublic);
+      var instance = instanceField?.GetValue(null);
+      if (instance != null && registryField?.GetValue(instance) is IDictionary registry)
+      {
+        if (!registry.Contains(id)) return true;
+        LastRejection = "Jotunn mock asset";
+        return false;
+      }
+    }
+    catch (Exception) { }
+    LastRejection = "Jotunn mock registry unavailable";
+    return false;
+  }
+
   private string[] ReadPatches()
   {
     var rows = new List<string>();
+    var unverified = new List<string>();
     foreach (var method in Harmony.GetAllPatchedMethods().Where(m => IsSkippedMethod(m) ||
       m.DeclaringType == typeof(DungeonDB) || m.DeclaringType == typeof(RoomManager) ||
       (m.DeclaringType == typeof(ZNetScene) && (m.Name is "Awake" or "Start")))
@@ -275,8 +338,9 @@ internal sealed class RoomMetadataDependencies
         rows.Add("patch group"); rows.Add(group.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
         foreach (var patch in group)
         {
-          if (IsSkippedMethod(method) && !IsKnownObserver(method, patch, groupIndex))
-            throw new InvalidDataException("unverified patch: " + patch.owner + " / " + method.DeclaringType?.Name + "." + method.Name);
+          if (IsSkippedMethod(method) && !IsKnownCompatiblePatch(method, patch, groupIndex))
+            unverified.Add(patch.owner + " / " + method.DeclaringType?.Name + "." + method.Name +
+              " / " + patch.PatchMethod.DeclaringType?.FullName + "." + patch.PatchMethod.Name + " [group=" + groupIndex + "]");
           rows.Add(patch.owner); rows.Add(patch.PatchMethod.Module.ModuleVersionId.ToString());
           rows.Add(patch.PatchMethod.DeclaringType?.FullName ?? "");
           rows.Add(patch.PatchMethod.ToString()); rows.Add(patch.priority.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -287,6 +351,9 @@ internal sealed class RoomMetadataDependencies
         }
       }
     }
+    if (unverified.Count > 0)
+      throw new InvalidDataException("unverified patches (" + unverified.Count + "): " +
+        string.Join("; ", unverified.Take(20)) + (unverified.Count > 20 ? "; ..." : ""));
     return rows.ToArray();
   }
 
@@ -301,9 +368,10 @@ internal sealed class RoomMetadataDependencies
       // A live or synthetic asset can contain runtime mutations not represented
       // in bundle bytes. Only cold assets in the stock loader are eligible.
       if (string.IsNullOrEmpty(name) || !id.IsValid || reference.m_loadedAsset != null || room.m_loadedRoom != null ||
-        reference.IsLoaded || reference.IsLoading || !ReferenceEquals(AssetRuntime.Loader, Loader) ||
+        reference.IsLoaded || reference.IsLoading || Loader.m_asyncInitWorker != null || !ReferenceEquals(AssetRuntime.Loader, Loader) ||
         !Loader.m_assetIDToLoaderIndex.TryGetValue(id, out var assetIndex))
         throw new InvalidDataException("not a cold file-backed asset");
+      if (!CanCapture(id)) return false;
       var asset = Loader.m_assetLoaders[assetIndex];
       if (!asset.m_assetID.Equals(id) || string.IsNullOrEmpty(asset.m_assetPathInBundle)) throw new InvalidDataException("asset mapping");
       if (asset.m_loadedCallbacks != null && asset.m_loadedCallbacks.Count != 0) throw new InvalidDataException("pending asset callbacks");
@@ -317,6 +385,12 @@ internal sealed class RoomMetadataDependencies
       foreach (var index in indices)
       {
         var bundle = Loader.m_bundleLoaders[index];
+        // A synchronous bundle load can finish other assets and invoke their
+        // callbacks. Skipping it is unsafe while such subscribers are pending,
+        // even if this particular room is not itself a Jotunn mock.
+        if (bundle.m_assetLoaderIndicesToNotifyWhenLoaded != null &&
+            bundle.m_assetLoaderIndicesToNotifyWhenLoaded.Count != 0)
+          throw new InvalidDataException("pending bundle asset callbacks");
         if (!Path.IsPathRooted(bundle.m_bundlePath)) throw new InvalidDataException("relative bundle path");
         var path = Path.GetFullPath(bundle.m_bundlePath);
         if (!Under(path, VanillaRoot)) throw new InvalidDataException("non-vanilla bundle");

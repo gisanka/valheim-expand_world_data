@@ -121,7 +121,8 @@ internal static class PersistentRoomMetadataCache
 
     internal void Remember(string name, DungeonDB.RoomData room, ConnectionValues[] values)
     {
-      if (!Keys.TryGetValue(room, out var found) || !found.HasValue || found.Value.Name != name || !RoomMetadataFile.CanStore(values))
+      if (!Keys.TryGetValue(room, out var found) || !found.HasValue || found.Value.Name != name ||
+          !Dependencies.CanCapture(room.m_prefab.m_assetID) || !RoomMetadataFile.CanStore(values))
       { SnapshotRejected++; return; }
       var key = found.Value;
       if (Loaded.ContainsKey(key) || Pending.ContainsKey(key)) return;
