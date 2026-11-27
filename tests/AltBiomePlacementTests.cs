@@ -1,12 +1,16 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Serialization;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using Common;
 using ExpandWorldData.AltBiomes;
 using ExpandWorldData.Data;
+using HarmonyLib;
 using NUnit.Framework;
 using Service;
 
@@ -28,18 +32,44 @@ public class AltBiomePlacementTests
   private ManualLogSource logger = null!;
   private bool mode;
   private object? customized;
+  private string directory = null!;
+  private Harmony? harmony;
 
   [SetUp]
   public void SetUp()
   {
     previous.Clear();
     errors.Clear();
+    harmony = null;
     foreach (var name in new[] { "Original", "Active", "OriginalPlacement" })
     {
       var field = Manager.GetField(name, Static)!;
       previous.Add(field, field.GetValue(null));
     }
     previous.Add(NativeList, NativeList.GetValue(null));
+    foreach (var name in new[] { "configDataMigration", "configDataAltBiomes", "configSplitDataPerMod", "valueAltBiomeData" })
+    {
+      var field = typeof(Configuration).GetField(name, Static)!;
+      previous.Add(field, field.GetValue(null));
+    }
+    var baseDirectory = typeof(Yaml).GetField(nameof(Yaml.BaseDirectory))!;
+    previous.Add(baseDirectory, baseDirectory.GetValue(null));
+    var filePath = Manager.GetField(nameof(AltBiomeManager.FilePath))!;
+    previous.Add(filePath, filePath.GetValue(null));
+    var ignoredWrites = typeof(Yaml).GetField("IgnoredWrites", Static)!;
+    previous.Add(ignoredWrites, ignoredWrites.GetValue(null));
+    ignoredWrites.SetValue(null, Activator.CreateInstance(ignoredWrites.FieldType));
+    directory = Path.Combine(Path.GetTempPath(), nameof(AltBiomePlacementTests), Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    Yaml.BaseDirectory = directory;
+    filePath.SetValue(null, Path.Combine(directory, "expand_altbiomes.yaml"));
+    var config = new ConfigFile(Path.Combine(directory, "test.cfg"), false) { SaveOnConfigSet = false };
+    Configuration.configDataMigration = config.Bind("Test", "Migration", false);
+    Configuration.configDataAltBiomes = config.Bind("Test", "Alt biomes", true);
+    Configuration.configSplitDataPerMod = config.Bind("Test", "Split per mod", false);
+    var synced = typeof(Configuration).GetField("valueAltBiomeData", Static)!;
+    synced.SetValue(null, FormatterServices.GetUninitializedObject(synced.FieldType));
+    Configuration.valueAltBiomeData.Value = "previous";
     var logField = typeof(Log).GetField("Logger", Static)!;
     previous.Add(logField, logField.GetValue(null));
     logger = new ManualLogSource(nameof(AltBiomePlacementTests));
@@ -69,10 +99,12 @@ public class AltBiomePlacementTests
   [TearDown]
   public void TearDown()
   {
+    harmony?.UnpatchSelf();
     foreach (var pair in previous) pair.Key.SetValue(null, pair.Value);
     typeof(YamlDataManager).GetField("Customized", Instance)!.SetValue(sync, customized);
     SetMode(mode);
     logger.Dispose();
+    Directory.Delete(directory, true);
   }
 
   private static void SetMode(bool enabled) => typeof(Configuration).GetProperty(nameof(Configuration.ServerOnly))!.SetValue(null, enabled);
@@ -209,6 +241,145 @@ public class AltBiomePlacementTests
     AltBiomeManager.CleanUp();
     AssertOriginalLists();
     Assert.That((IList)NativeList.GetValue(null)!, Is.Empty);
+  }
+
+  private void EnableBackfill()
+  {
+    Configuration.configDataMigration.Value = true;
+    // Replace only the native host check; parsing, writing and rereading use the production path.
+    harmony = new Harmony(nameof(AltBiomePlacementTests) + Guid.NewGuid().ToString("N"));
+    harmony.Patch(AccessTools.Method(typeof(Helper), nameof(Helper.IsServer)),
+      prefix: new HarmonyMethod(typeof(AltBiomePlacementTests), nameof(AsServer)));
+    foreach (var name in new[] { "PrefabToBundleMapping", "BundleToModMapping" })
+    {
+      var field = typeof(AssetTracker).GetField(name, Static)!;
+      previous.Add(field, field.GetValue(null));
+      field.SetValue(null, new Dictionary<string, string>());
+    }
+    ((Dictionary<string, string>)typeof(AssetTracker).GetField("PrefabToBundleMapping", Static)!.GetValue(null)!)
+      .Add("otherregion", "sample_bundle");
+    ((Dictionary<string, string>)typeof(AssetTracker).GetField("BundleToModMapping", Static)!.GetValue(null)!)
+      .Add("sample_bundle", "Sample Mod");
+  }
+
+  private static bool AsServer(ref bool __result)
+  {
+    __result = true;
+    return false;
+  }
+
+  [TestCase(false)]
+  [TestCase(true)]
+  public void ReadConfigsBackfillsMissingNativeAltBiomesAndRereadsWithoutDuplicates(bool splitPerMod)
+  {
+    EnableBackfill();
+    Configuration.configSplitDataPerMod.Value = splitPerMod;
+    const string yaml = "# Keep this comment\n- name: VanillaRegion\n  blockLocationNames: [CustomLocation]\n  chance: invalid\n  spawn: ignored\n";
+    File.WriteAllText(AltBiomeManager.FilePath, yaml);
+    var native = NativeList.GetValue(null);
+
+    AltBiomeManager.ReadConfigs();
+
+    var files = Directory.GetFiles(directory, AltBiomeManager.Pattern).ToDictionary(path => path, File.ReadAllText);
+    var entries = files.Values.SelectMany(text => Yaml.DeserializerUnSafe().Deserialize<List<AltBiomePlacementYaml>>(text)).ToList();
+    Assert.That(entries.Select(entry => entry.name), Is.EquivalentTo(new[] { "VanillaRegion", "OtherRegion" }));
+    Assert.That(File.ReadAllText(AltBiomeManager.FilePath), Does.StartWith(yaml));
+    Assert.That(File.Exists(Path.Combine(directory, "expand_altbiomes_sample_mod.yaml")), Is.EqualTo(splitPerMod));
+    Assert.That(Names(first, "m_blockLocationNames"), Is.EqualTo(new[] { "CustomLocation" }));
+    Assert.That(Names(second, "m_blockVegetationNames"), Is.EqualTo(new[] { "OtherVegetation" }));
+    Assert.That(NativeList.GetValue(null), Is.SameAs(native));
+    Assert.That(((IList)native!)[1], Is.SameAs(second));
+    Assert.That(Configuration.valueAltBiomeData.Value, Is.Empty);
+    Assert.That(errors, Is.Empty);
+    AssertNoWorldRefresh();
+
+    AltBiomeManager.ReadConfigs();
+    Assert.That(Directory.GetFiles(directory, AltBiomeManager.Pattern).ToDictionary(path => path, File.ReadAllText), Is.EquivalentTo(files));
+    AssertNoWorldRefresh();
+  }
+
+  [Test]
+  public void BackfillRewriteKeepsCurrentRulesUntilReread()
+  {
+    EnableBackfill();
+    const string yaml = "- name: VanillaRegion\n  blockLocationNames: [Changed]\n";
+    File.WriteAllText(AltBiomeManager.FilePath, yaml);
+
+    Assert.That(Apply(yaml), Is.EqualTo(SetResult.Rewritten));
+    AssertOriginalLists();
+    AssertNoWorldRefresh();
+
+    AltBiomeManager.ReadConfigs();
+    Assert.That(Names(first, "m_blockLocationNames"), Is.EqualTo(new[] { "Changed" }));
+    Assert.That(errors, Is.Empty);
+  }
+
+  [Test]
+  public void MissingPreviouslyCustomizedEntryIsBackfilledWithNativeBlocklists()
+  {
+    Assert.That(Apply("- name: OtherRegion\n  blockLocationNames: [Changed]\n"), Is.EqualTo(SetResult.Applied));
+    EnableBackfill();
+    File.WriteAllText(AltBiomeManager.FilePath, "- name: VanillaRegion\n");
+
+    AltBiomeManager.ReadConfigs();
+
+    var entries = Yaml.Deserializer().Deserialize<List<AltBiomeYaml>>(File.ReadAllText(AltBiomeManager.FilePath));
+    Assert.That(entries.Single(entry => entry.name == "OtherRegion").blockLocationNames, Is.EqualTo(new[] { "OtherLocation" }));
+    AssertOriginalLists();
+    AssertNoWorldRefresh();
+  }
+
+  [Test]
+  public void NormalModeUsesTheSameDefaultBackfillWriter()
+  {
+    EnableBackfill();
+    SetMode(false);
+    File.WriteAllText(AltBiomeManager.FilePath, "- name: VanillaRegion\n  chance: 0.5\n");
+    var backfill = Manager.GetMethod("AddMissingEntries", Static)!;
+
+    Assert.That(backfill.Invoke(null, new object[] { new[] { "VanillaRegion" } }), Is.True);
+
+    var entries = Yaml.Deserializer().Deserialize<List<AltBiomeYaml>>(File.ReadAllText(AltBiomeManager.FilePath));
+    Assert.That(entries.Select(entry => entry.name), Is.EquivalentTo(new[] { "VanillaRegion", "OtherRegion" }));
+    Assert.That(entries.Single(entry => entry.name == "VanillaRegion").chance, Is.EqualTo(0.5f));
+    Assert.That(backfill.Invoke(null, new object[] { entries.Select(entry => entry.name) }), Is.False);
+    AssertOriginalLists();
+    AssertNoWorldRefresh();
+    Assert.That(errors, Is.Empty);
+  }
+
+  [Test]
+  public void DisablingAltBiomeDataRestoresDefaultsWithoutBackfilling()
+  {
+    Assert.That(Apply("- name: VanillaRegion\n  blockLocationNames: [Changed]\n"), Is.EqualTo(SetResult.Applied));
+    EnableBackfill();
+    const string yaml = "- name: VanillaRegion\n";
+    File.WriteAllText(AltBiomeManager.FilePath, yaml);
+    Configuration.configDataAltBiomes.Value = false;
+
+    AltBiomeManager.ReadConfigs();
+
+    Assert.That(File.ReadAllText(AltBiomeManager.FilePath), Is.EqualTo(yaml));
+    AssertOriginalLists();
+    AssertNoWorldRefresh();
+  }
+
+  [TestCase(false)]
+  [TestCase(true)]
+  public void DisabledMigrationOrInvalidRulesDoNotBackfill(bool invalid)
+  {
+    EnableBackfill();
+    Configuration.configDataMigration.Value = invalid;
+    var yaml = "- name: " + (invalid ? "UnknownRegion" : "VanillaRegion") + "\n";
+    File.WriteAllText(AltBiomeManager.FilePath, yaml);
+
+    AltBiomeManager.ReadConfigs();
+
+    Assert.That(File.ReadAllText(AltBiomeManager.FilePath), Is.EqualTo(yaml));
+    Assert.That(Directory.GetFiles(directory, AltBiomeManager.Pattern), Has.Length.EqualTo(1));
+    Assert.That(errors.Count, invalid ? Is.GreaterThan(0) : Is.EqualTo(0));
+    AssertOriginalLists();
+    AssertNoWorldRefresh();
   }
 
   private void AssertOriginalLists()

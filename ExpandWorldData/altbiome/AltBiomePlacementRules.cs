@@ -59,6 +59,8 @@ public static partial class AltBiomeManager
       Log.Warning("Failed to load any alt biome placement rules. No changes done.");
       return SetResult.Failed;
     }
+    if (rules.Count > 0 && YamlDataManager.BackfillEnabled && AddMissingEntries(rules.Keys.Select(alt => alt.m_name)))
+      return SetResult.Rewritten;
     ApplyPlacementRules(rules);
     Log.Info($"Reloading alt biome placement rules ({rules.Count} entries).");
     return SetResult.Applied;

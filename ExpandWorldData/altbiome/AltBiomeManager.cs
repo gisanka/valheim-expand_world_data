@@ -85,18 +85,18 @@ public static partial class AltBiomeManager
       Log.Warning("Failed to load any alt biome data. No changes done.");
       return SetResult.Failed;
     }
-    if (YamlDataManager.BackfillEnabled && AddMissingEntries(data))
+    if (YamlDataManager.BackfillEnabled && AddMissingEntries(data.Select(entry => entry.m_name)))
       return SetResult.Rewritten;
     Apply(data, true);
     return SetResult.Applied;
   }
 
-  private static bool AddMissingEntries(List<AltBiome> entries)
+  private static bool AddMissingEntries(IEnumerable<string> names)
   {
-    var missing = YamlFiles.GetMissingEntries(Original, entries.Select(entry => entry.m_name), entry => entry.m_name);
+    var missing = YamlFiles.GetMissingEntries(Original, names, entry => entry.m_name);
     if (missing.Count == 0) return false;
     Log.Warning($"Adding {missing.Count} missing alt biomes to the expand_altbiomes.yaml file.");
-    YamlFiles.SavePerMod("altbiomes", missing.Select(ToData).ToList(), item => item.name, true);
+    YamlFiles.SavePerMod("altbiomes", missing.Select(ToDefaultData).ToList(), item => item.name, true);
     return true;
   }
 

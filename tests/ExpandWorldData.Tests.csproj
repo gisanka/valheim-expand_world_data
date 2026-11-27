@@ -8,8 +8,9 @@
     <ManagedDir Condition="'$(ManagedDir)' == ''">..\..\Libs</ManagedDir>
   </PropertyGroup>
   <ItemGroup>
-    <!-- BepInEx.Paths uses MonoMod.Utils during test fixture setup. -->
+    <!-- BepInEx.Paths and the native host-check patch use these MonoMod dependencies. -->
     <PackageReference Include="MonoMod.Utils" Version="22.1.29.1" />
+    <PackageReference Include="MonoMod.RuntimeDetour" Version="22.1.29.1" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="NUnit" Version="3.14.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
