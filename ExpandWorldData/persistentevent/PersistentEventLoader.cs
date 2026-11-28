@@ -13,6 +13,15 @@ public class PersistentEventLoader
   public static Dictionary<PersistentEventSystem.PersistentEvent, PersistentEventExtra> Extra = [];
   public static Dictionary<PersistentEventSystem.ObjectSpawnSettings, PersistentEventObjectExtra> ObjectExtra = [];
 
+  internal static GameObject? GetOriginalPrefab(string name) =>
+    PersistentEventManager.OriginalPrefabs.TryGetValue(name, out var prefab) && prefab ? prefab : null;
+
+  internal static GameObject? FindPrefab(string name)
+  {
+    var prefab = ZNetScene.instance.GetPrefab(name);
+    return prefab ? prefab : GetOriginalPrefab(name);
+  }
+
   public static PersistentEventSystem.PersistentEvent FromData(PersistentEventYaml data, string fileName)
   {
     var hasDuration = data.minDuration > 0f || data.maxDuration > 0f;
@@ -48,7 +57,7 @@ public class PersistentEventLoader
   {
     PersistentEventSystem.ObjectSpawnSettings result = new()
     {
-      prefabs = [.. data.prefabs.Select(name => ZNetScene.instance.GetPrefab(name)).Where(prefab => prefab)],
+      prefabs = [.. data.prefabs.Select(FindPrefab).Where(prefab => prefab).Select(prefab => prefab!)],
       important = data.important,
       randomRotation = data.randomRotation,
       minCount = data.minCount,

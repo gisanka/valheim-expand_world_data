@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using ExpandWorldData.Data;
 using Service;
+using UnityEngine;
 
 namespace ExpandWorldData.PersistentEvents;
 
@@ -11,6 +12,7 @@ public partial class PersistentEventManager
   public static readonly string FilePath = Path.Combine(Yaml.Directory, "expand_persistent_events.yaml");
   public const string Pattern = "expand_persistent_events*.yaml";
   public static List<PersistentEventSystem.PersistentEvent> Originals = [];
+  internal static readonly Dictionary<string, GameObject> OriginalPrefabs = [];
   public static bool HasData { get; private set; }
 
   public static void CreateConfigs() => Instance.CreateConfigs();
@@ -52,8 +54,12 @@ public partial class PersistentEventManager
 
   public static void Initialize()
   {
+    OriginalPrefabs.Clear();
     if (PersistentEventSystem.instance == null) return;
     Originals = [.. PersistentEventSystem.instance.m_possibleEvents];
+    // Native events can reference containers that are not registered in ZNetScene.
+    foreach (var prefab in Originals.SelectMany(ev => ev.objectsToSpawn).SelectMany(group => group.prefabs ?? []))
+      if (prefab) OriginalPrefabs[prefab.name] = prefab;
     HasData = false;
   }
 

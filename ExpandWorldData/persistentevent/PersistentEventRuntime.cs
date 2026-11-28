@@ -109,7 +109,7 @@ public static partial class PersistentEventRuntime
     if (Configuration.ServerOnly)
     {
       // Blueprints can be edited independently after the event configuration was loaded.
-      try { PersistentEventManager.ValidateServerOnlyPrefabs(extra.Prefabs); }
+      try { PersistentEventManager.ValidateServerOnlyPrefabs(extra.Prefabs, extra.Data == null); }
       catch (System.Exception e)
       {
         Log.Error(e.Message);
@@ -139,11 +139,25 @@ public static partial class PersistentEventRuntime
         spawnedObjectPositions.Add(pos);
         var rot = __instance.randomRotation ? Quaternion.Euler(Vector3.up * Random.value * 360f) : Quaternion.identity;
         var prefab = extra.Prefabs[Random.Range(0, extra.Prefabs.Length)];
-        BlueprintObject obj = new(prefab, Vector3.zero, Quaternion.identity, Vector3.one, extra.Data, 1f);
-        Create.BPO(obj, pos, rot, Vector3.one, (data, _) => data, name => name, null);
+        var original = extra.Data == null ? FindOriginalObject(prefab) : null;
+        if (original)
+          Object.Instantiate(original, pos, rot);
+        else
+        {
+          BlueprintObject obj = new(prefab, Vector3.zero, Quaternion.identity, Vector3.one, extra.Data, 1f);
+          Create.BPO(obj, pos, rot, Vector3.one, (data, _) => data, name => name, null);
+        }
         break;
       }
     }
     return false;
+  }
+
+  internal static GameObject? FindOriginalObject(string name)
+  {
+    var original = PersistentEventLoader.GetOriginalPrefab(name);
+    if (!original) return null;
+    var registered = ZNetScene.instance.GetPrefab(name);
+    return registered && registered.GetComponent<ZNetView>() ? null : original;
   }
 }

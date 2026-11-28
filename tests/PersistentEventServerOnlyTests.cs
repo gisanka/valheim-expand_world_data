@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.Serialization;
 using BepInEx.Logging;
 using Common;
 using ExpandWorldData.Data;
@@ -24,19 +25,22 @@ public class PersistentEventServerOnlyTests
   private static readonly Type EventType = OriginalsField.FieldType.GetGenericArguments()[0];
   private static readonly FieldInfo ExtrasField = typeof(PersistentEventLoader).GetField("Extra")!;
   private static readonly FieldInfo ObjectExtrasField = typeof(PersistentEventLoader).GetField("ObjectExtra")!;
+  private static readonly FieldInfo OriginalPrefabsField = Manager.GetField("OriginalPrefabs", Static)!;
   private readonly Dictionary<FieldInfo, object?> previous = [];
   private readonly List<string> errors = [];
   private object first = null!;
   private object second = null!;
   private ManualLogSource logger = null!;
   private bool mode;
+  private Harmony? prefabHost;
 
   [SetUp]
   public void SetUp()
   {
     previous.Clear();
     errors.Clear();
-    foreach (var field in new[] { OriginalsField, ExtrasField, ObjectExtrasField, typeof(Log).GetField("Logger", Static)! })
+    prefabHost = null;
+    foreach (var field in new[] { OriginalsField, ExtrasField, ObjectExtrasField, OriginalPrefabsField, typeof(Log).GetField("Logger", Static)! })
       previous.Add(field, field.GetValue(null));
     logger = new ManualLogSource(nameof(PersistentEventServerOnlyTests));
     logger.LogEvent += (_, args) => { if (args.Level == LogLevel.Error) errors.Add(args.Data.ToString()); };
@@ -57,11 +61,13 @@ public class PersistentEventServerOnlyTests
     OriginalsField.SetValue(null, originals);
     ExtrasField.SetValue(null, Activator.CreateInstance(ExtrasField.FieldType));
     ObjectExtrasField.SetValue(null, Activator.CreateInstance(ObjectExtrasField.FieldType));
+    OriginalPrefabsField.SetValue(null, Activator.CreateInstance(OriginalPrefabsField.FieldType));
   }
 
   [TearDown]
   public void TearDown()
   {
+    prefabHost?.UnpatchSelf();
     foreach (var pair in previous) pair.Key.SetValue(null, pair.Value);
     SetMode(mode);
     logger.Dispose();
@@ -352,6 +358,172 @@ public class PersistentEventServerOnlyTests
   {
     var settings = new PersistentEventObjectYaml { prefabs = new[] { "Pickable_Flint" }, water = water };
     Assert.DoesNotThrow(() => Manager.GetMethod("ValidateServerOnlyObjectSettings", Static)!.Invoke(null, new object[] { settings }));
+  }
+
+  private object PrepareOriginalPrefab(string name)
+  {
+    // Replace Unity's liveness check in EWD only; the test host has no native engine.
+    prefabHost = new Harmony(nameof(PersistentEventServerOnlyTests) + Guid.NewGuid().ToString("N"));
+    var checks = new HarmonyMethod(typeof(PersistentEventServerOnlyTests), nameof(ManagedPrefabChecks));
+    foreach (var method in new[] {
+      typeof(PersistentEventLoader).GetMethod("GetOriginalPrefab", Static),
+      typeof(PersistentEventLoader).GetMethod("FindPrefab", Static),
+      Manager.GetMethod("ValidateServerOnlyPrefab", Static),
+      typeof(PersistentEventRuntime).GetMethod("FindOriginalObject", Static)
+    }.Where(method => method != null)) prefabHost.Patch(method, transpiler: checks);
+    foreach (var method in typeof(PersistentEventLoader).GetNestedTypes(Instance).SelectMany(type => type.GetMethods(Instance))
+      .Where(method => method.ReturnType == typeof(bool) && method.GetParameters().Length == 1
+        && method.GetParameters()[0].ParameterType.FullName == "UnityEngine.GameObject"))
+      prefabHost.Patch(method, transpiler: checks);
+    var sceneType = EventType.Assembly.GetType("ZNetScene")!;
+    var instance = sceneType.GetField("s_instance", Static)!;
+    previous.Add(instance, instance.GetValue(null));
+    var scene = FormatterServices.GetUninitializedObject(sceneType);
+    var named = sceneType.GetField("m_namedPrefabs", Instance)!;
+    named.SetValue(scene, Activator.CreateInstance(named.FieldType));
+    instance.SetValue(null, scene);
+    var loaded = typeof(global::Data.BlueprintCache).GetField("Loaded", Static)!;
+    previous.Add(loaded, loaded.GetValue(null));
+    loaded.SetValue(null, Activator.CreateInstance(loaded.FieldType));
+    ((IDictionary)loaded.GetValue(null)!).Add(name, null);
+    var prefab = CreatePrefabHandle();
+    ((IDictionary)OriginalPrefabsField.GetValue(null)!).Add(name, prefab);
+    var group = ((IList)Field(first, "objectsToSpawn")!)[0]!;
+    var prefabs = group.GetType().GetField("prefabs", Instance)!;
+    var list = (IList)Activator.CreateInstance(prefabs.FieldType)!;
+    list.Add(prefab);
+    prefabs.SetValue(group, list);
+    return prefab;
+  }
+
+  private static IEnumerable<CodeInstruction> ManagedPrefabChecks(IEnumerable<CodeInstruction> instructions)
+  {
+    foreach (var code in instructions)
+    {
+      if (code.operand is MethodInfo method && method.DeclaringType?.FullName == "UnityEngine.Object" && method.Name == "op_Implicit")
+        code.operand = AccessTools.Method(typeof(PersistentEventServerOnlyTests), nameof(ManagedExists));
+      yield return code;
+    }
+  }
+
+  private static bool ManagedExists(object? value) => value != null;
+
+  private static object CreatePrefabHandle()
+  {
+    // No native GameObject is created or dereferenced.
+    var type = OriginalPrefabsField.FieldType.GetGenericArguments()[1];
+    return FormatterServices.GetUninitializedObject(type);
+  }
+
+  private static string ObjectsYaml(params string[] names)
+  {
+    var yaml = Yaml.Serializer().Serialize(new[] { new PersistentEventObjectYaml { prefabs = names } });
+    return "- name: VanillaEventA\n  objects:\n" + string.Join("\n", yaml.Split('\n').Select(line => "    " + line));
+  }
+
+  [TestCase("NativeEventContainer")]
+  [TestCase("OtherEventContainer")]
+  public void ExportedObjectSettingsResolveOriginalReferencesAndKeepNativePlacement(string name)
+  {
+    var prefab = PrepareOriginalPrefab(name);
+    var result = Build(ObjectsYaml(name));
+    Assert.That(result.Status, Is.EqualTo(SetResult.Applied), string.Join("\n", errors));
+    var group = ((IList)Field(result.Events[0]!, "objectsToSpawn")!)[0]!;
+    Assert.That(((IList)group.GetType().GetField("prefabs", Instance)!.GetValue(group)!), Has.Count.EqualTo(1));
+    Assert.That(((IList)group.GetType().GetField("prefabs", Instance)!.GetValue(group)!)[0], Is.SameAs(prefab));
+    Assert.That(result.Objects, Is.Empty, "Native groups must not be replaced by blueprint placement.");
+    AssertNoWorldRefresh();
+  }
+
+  [Test]
+  public void OriginalReferenceIsAlsoResolvedByTheNormalObjectLoader()
+  {
+    var prefab = PrepareOriginalPrefab("NativeEventContainer");
+    SetMode(false);
+    var settings = new PersistentEventObjectYaml { prefabs = new[] { "NativeEventContainer" } };
+    var group = typeof(PersistentEventLoader).GetMethod("FromObject", Static)!
+      .Invoke(null, new[] { settings, (object)"test", ObjectExtrasField.GetValue(null)! })!;
+    Assert.That(((IList)group.GetType().GetField("prefabs", Instance)!.GetValue(group)!)[0], Is.SameAs(prefab));
+  }
+
+  [Test]
+  public void RegisteredPrefabStillTakesPrecedenceOverAnOriginalReference()
+  {
+    PrepareOriginalPrefab("NativeEventContainer");
+    var registered = CreatePrefabHandle();
+    var sceneType = EventType.Assembly.GetType("ZNetScene")!;
+    var scene = sceneType.GetField("s_instance", Static)!.GetValue(null)!;
+    ((IDictionary)sceneType.GetField("m_namedPrefabs", Instance)!.GetValue(scene)!).Add(Parse.Hash(new[] { "NativeEventContainer" }, 0), registered);
+    Assert.That(typeof(PersistentEventLoader).GetMethod("FindPrefab", Static)!.Invoke(null, new object[] { "NativeEventContainer" }), Is.SameAs(registered));
+  }
+
+  [Test]
+  public void OriginalContainerWithCustomDataIsRejectedBeforeDataResolution()
+  {
+    PrepareOriginalPrefab("NativeEventContainer");
+    var result = Build("- name: VanillaEventA\n  objects:\n  - prefabs: [NativeEventContainer]\n    data: CustomData\n");
+    Assert.That(result.Status, Is.EqualTo(SetResult.Failed));
+    Assert.That(errors.Single(), Does.Contain("NativeEventContainer").And.Contain("network prefab"));
+    Assert.That(result.Events, Is.Empty);
+    Assert.That(result.Objects, Is.Empty);
+  }
+
+  [Test]
+  public void UnknownObjectNameStillRejectsTheWholeCandidate()
+  {
+    PrepareOriginalPrefab("NativeEventContainer");
+    ((IDictionary)typeof(global::Data.BlueprintCache).GetField("Loaded", Static)!.GetValue(null)!).Add("UnknownObject", null);
+    var result = Build(ObjectsYaml("UnknownObject"));
+    Assert.That(result.Status, Is.EqualTo(SetResult.Failed));
+    Assert.That(errors.Single(), Does.Contain("UnknownObject").And.Contain("was not found"));
+    Assert.That(result.Events, Is.Empty);
+  }
+
+  [Test]
+  public void OriginalContainersCanBeMixedWithBlueprintAlternatives()
+  {
+    var prefab = PrepareOriginalPrefab("NativeEventContainer");
+    var blueprint = new global::Data.Blueprint("ExtraBlueprint");
+    ((IDictionary)typeof(global::Data.BlueprintCache).GetField("Loaded", Static)!.GetValue(null)!).Add(blueprint.Name, blueprint);
+    var result = Build(ObjectsYaml("NativeEventContainer", "ExtraBlueprint"));
+    Assert.That(result.Status, Is.EqualTo(SetResult.Applied), string.Join("\n", errors));
+    Assert.That(result.Objects, Has.Count.EqualTo(1));
+    var group = ((IList)Field(result.Events[0]!, "objectsToSpawn")!)[0]!;
+    Assert.That(((IList)group.GetType().GetField("prefabs", Instance)!.GetValue(group)!)[0], Is.SameAs(prefab));
+    Assert.That(((PersistentEventObjectExtra)result.Objects[group]!).Prefabs,
+      Is.EqualTo(new[] { "NativeEventContainer", "ExtraBlueprint" }));
+  }
+
+  [TestCase("NativeEventContainer", "network prefab")]
+  [TestCase("ExtraBlueprint", "Recursive")]
+  public void BlueprintContentsDoNotBypassNetworkOrRecursionChecks(string childName, string message)
+  {
+    PrepareOriginalPrefab("NativeEventContainer");
+    var blueprint = new global::Data.Blueprint("ExtraBlueprint");
+    var child = (global::Data.BlueprintObject)FormatterServices.GetUninitializedObject(typeof(global::Data.BlueprintObject));
+    child.Prefab = childName;
+    child.Chance = 1f;
+    blueprint.Objects.Add(child);
+    ((IDictionary)typeof(global::Data.BlueprintCache).GetField("Loaded", Static)!.GetValue(null)!).Add(blueprint.Name, blueprint);
+    var result = Build(ObjectsYaml("ExtraBlueprint"));
+    Assert.That(result.Status, Is.EqualTo(SetResult.Failed));
+    Assert.That(errors.Single(), Does.Contain(message));
+    Assert.That(result.Events, Is.Empty);
+    Assert.That(result.Objects, Is.Empty);
+  }
+
+  [Test]
+  public void ExtendedPlacementContainsSeparateNativeAndBlueprintCreationPaths()
+  {
+    var create = typeof(PersistentEventRuntime).GetMethod("CreateObjects", Static)!;
+    var instructions = PatchProcessor.GetOriginalInstructions(create);
+    var lookup = instructions.FindIndex(code => code.operand is MethodInfo method && method.Name == "FindOriginalObject");
+    var instantiate = instructions.FindIndex(code => code.operand is MethodInfo method
+      && method.DeclaringType?.FullName == "UnityEngine.Object" && method.Name == "Instantiate");
+    var blueprint = instructions.FindIndex(code => code.operand is MethodInfo method && method.Name == "BPO");
+    Assert.That(lookup, Is.GreaterThan(0));
+    Assert.That(instantiate, Is.GreaterThan(lookup));
+    Assert.That(blueprint, Is.GreaterThan(instantiate));
   }
 
   private static MethodInfo MidGameLocation => EventType.Assembly.GetType("ZoneSystem")!.GetMethod("SpawnLocationMidGame", Instance)!;

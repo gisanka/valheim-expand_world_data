@@ -30,7 +30,7 @@ public partial class PersistentEventManager
     foreach (var obj in objects)
     {
       ValidateServerOnlyObjectSettings(obj);
-      var nativeOnly = ValidateServerOnlyPrefabs(obj.prefabs) && obj.data == "";
+      var nativeOnly = ValidateServerOnlyPrefabs(obj.prefabs, obj.data == "") && obj.data == "";
       var group = PersistentEventLoader.FromObject(obj, fileName, metadata);
       if (obj.data != "" && metadata[group].Data == null)
         throw new ArgumentException($"Persistent event object data '{obj.data}' was not found.");
@@ -41,11 +41,11 @@ public partial class PersistentEventManager
     return result;
   }
 
-  internal static bool ValidateServerOnlyPrefabs(IEnumerable<string> names)
+  internal static bool ValidateServerOnlyPrefabs(IEnumerable<string> names, bool allowEventPrefabs = false)
   {
     var nativeOnly = true;
     foreach (var name in names)
-      nativeOnly &= ValidateServerOnlyPrefab(name, new HashSet<string>(StringComparer.Ordinal));
+      nativeOnly &= ValidateServerOnlyPrefab(name, new HashSet<string>(StringComparer.Ordinal), allowEventPrefabs);
     return nativeOnly;
   }
 
@@ -64,9 +64,10 @@ public partial class PersistentEventManager
       throw new ArgumentException($"Invalid persistent event water rule: '{obj.water}'.");
   }
 
-  // Returns true for a native prefab, false for a blueprint made from network prefabs.
-  private static bool ValidateServerOnlyPrefab(string name, HashSet<string> visiting)
+  // Native event containers are valid only for direct placement without custom data.
+  private static bool ValidateServerOnlyPrefab(string name, HashSet<string> visiting, bool allowEventPrefabs)
   {
+    if (allowEventPrefabs && PersistentEventLoader.GetOriginalPrefab(name)) return true;
     var prefab = ZNetScene.instance.GetPrefab(name);
     if (prefab)
     {
@@ -74,6 +75,8 @@ public partial class PersistentEventManager
         throw new ArgumentException($"Persistent event prefab '{name}' has no ZNetView and cannot be sent to vanilla clients.");
       return true;
     }
+    if (PersistentEventLoader.GetOriginalPrefab(name))
+      throw new ArgumentException($"Persistent event prefab '{name}' requires a registered network prefab for custom data or blueprint use.");
     var blueprintName = Parse.Name(name);
     if (!visiting.Add(blueprintName))
       throw new ArgumentException($"Recursive persistent event blueprint '{name}'.");
@@ -82,7 +85,7 @@ public partial class PersistentEventManager
     foreach (var obj in blueprint.Objects)
     {
       if (obj.Chance == 0f || obj.Prefab == "") continue;
-      ValidateServerOnlyPrefab(obj.Prefab, visiting);
+      ValidateServerOnlyPrefab(obj.Prefab, visiting, false);
     }
     visiting.Remove(blueprintName);
     return false;
